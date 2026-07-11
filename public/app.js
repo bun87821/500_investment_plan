@@ -100,6 +100,10 @@ const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const tickerOf = (symbol) => String(symbol).split('.')[0];
+const quoteUrlOf = (symbol) => {
+  const s = encodeURIComponent(String(symbol || '').trim());
+  return /\.TW$|\.TWO$/.test(String(symbol || '')) ? `https://tw.stock.yahoo.com/quote/${s}` : `https://finance.yahoo.com/quote/${s}`;
+};
 
 // ---------- 資料存取 ----------
 function applyDoc(data) {
@@ -326,7 +330,7 @@ function renderHoldings(rows, totalInvested, totalValue, totalPnl) {
     const priceDigits = stock.currency === 'KRW' || stock.currency === 'JPY' ? 0 : 2;
     tr.innerHTML = `
       <td class="holding-main" data-label="標的">
-        <div class="stock-name">${esc(stock.name)}</div>
+        <a class="stock-name stock-link" href="${quoteUrlOf(stock.symbol)}" target="_blank" rel="noopener noreferrer">${esc(stock.name)}</a>
         <div class="stock-meta"><span>${esc(tickerOf(stock.symbol))}</span><span class="chip">${esc(stock.market)}</span></div>
       </td>
       <td class="num" data-label="目標配置">${fmtNum(stock.percent, 1)}%<span class="cell-sub">${fmtTWD(r.targetTWD)}</span></td>

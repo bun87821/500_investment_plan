@@ -491,6 +491,15 @@ tfoot td {
 }
 
 .stock-name { font-weight: 600; }
+.stock-link {
+  color: var(--text-primary);
+  text-decoration: none;
+  text-underline-offset: 3px;
+}
+.stock-link:hover {
+  color: var(--series-1);
+  text-decoration: underline;
+}
 .stock-meta { color: var(--text-muted); font-size: 0.75rem; display: flex; gap: 6px; align-items: center; }
 
 .chip {
