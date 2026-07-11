@@ -255,9 +255,20 @@ function computeStock(stock) {
   return { stock, shares, avgCost, invested, targetTWD, price, valueTWD, pnl, progress, dayChange };
 }
 
+function sortedByTargetPercent(items, stockOf = (x) => x) {
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => {
+      const pa = Number(stockOf(a.item).percent) || 0;
+      const pb = Number(stockOf(b.item).percent) || 0;
+      return pb - pa || a.index - b.index;
+    })
+    .map(({ item }) => item);
+}
+
 // ---------- 畫面 ----------
 function render() {
-  const rows = state.stocks.map(computeStock);
+  const rows = sortedByTargetPercent(state.stocks.map(computeStock), (r) => r.stock);
 
   const totalInvested = rows.reduce((s, r) => s + (r.invested ?? 0), 0);
   const anyValueMissing = rows.some((r) => r.valueTWD == null);
@@ -560,7 +571,7 @@ function rebuildStockSelect() {
   const select = $('tx-stock');
   const prev = select.value;
   select.innerHTML = '';
-  for (const s of state.stocks) {
+  for (const s of sortedByTargetPercent(state.stocks)) {
     const opt = document.createElement('option');
     opt.value = s.id;
     opt.textContent = `${s.name}（${tickerOf(s.symbol)}・${s.currency}）`;
@@ -609,7 +620,7 @@ function openEditor() {
   refreshCategoryDatalist();
   const body = $('editor-body');
   body.innerHTML = '';
-  for (const s of state.stocks) body.appendChild(editorRow(s));
+  for (const s of sortedByTargetPercent(state.stocks)) body.appendChild(editorRow(s));
   updateEditorTotal();
   $('editor-card').hidden = false;
   $('edit-stocks-btn').hidden = true;
@@ -665,7 +676,7 @@ function saveEditor() {
   }
 
   state.budget = budget;
-  state.stocks = stocks;
+  state.stocks = sortedByTargetPercent(stocks);
   savePortfolio();
   rebuildStockSelect();
   closeEditor();
