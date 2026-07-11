@@ -122,6 +122,130 @@ h1 { font-size: 1.5rem; font-weight: 700; }
 }
 .card h2 { font-size: 1.05rem; margin-bottom: 12px; }
 
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.card-head h2 { margin-bottom: 0; }
+
+/* 分段切換鈕 */
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.segmented button {
+  border: none;
+  background: var(--surface);
+  color: var(--text-secondary);
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  border-left: 1px solid var(--border);
+}
+.segmented button:first-child { border-left: none; }
+.segmented button:hover { background: color-mix(in srgb, var(--series-1) 8%, transparent); }
+.segmented button.active {
+  background: var(--series-1);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* 甜甜圈圖 */
+.donut-wrap {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.donut {
+  position: relative;
+  width: 300px;
+  max-width: 100%;
+  flex: 0 0 auto;
+}
+.donut-svg { width: 100%; height: auto; display: block; }
+.donut-svg path { transition: opacity 0.15s ease; cursor: default; }
+.donut-svg:hover path { opacity: 0.4; }
+.donut-svg path:hover { opacity: 1; }
+.slice-label {
+  fill: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  pointer-events: none;
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.28);
+  stroke-width: 2.5px;
+}
+.donut-center-label { fill: var(--text-secondary); font-size: 13px; }
+.donut-center-value { fill: var(--text-primary); font-size: 20px; font-weight: 700; }
+.donut-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 300px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  text-align: center;
+}
+.donut-tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: var(--text-primary);
+  color: var(--surface);
+  padding: 6px 9px;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  white-space: pre-line;
+  z-index: 10;
+  max-width: 220px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.donut-legend {
+  flex: 1 1 240px;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.legend-group { display: flex; flex-direction: column; gap: 3px; }
+.legend-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+}
+.legend-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+.legend-cat { font-weight: 600; color: var(--text-primary); }
+.legend-cat-pct {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.legend-members {
+  padding-left: 20px;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 2px;
+  align-items: baseline;
+}
+.legend-member.zero { color: var(--text-muted); }
+.legend-dot { color: var(--text-muted); }
+
 .overall-progress-head {
   display: flex;
   justify-content: space-between;

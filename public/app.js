@@ -3,21 +3,54 @@
 const DEFAULT_BUDGET = 5_000_000;
 
 const DEFAULT_STOCKS = [
-  { id: '2330', name: '台積電', symbol: '2330.TW', market: '台股', currency: 'TWD', percent: 25 },
-  { id: 'TSM', name: 'TSM ADR', symbol: 'TSM', market: '美股', currency: 'USD', percent: 25 },
-  { id: 'HYNIX', name: 'SK hynix', symbol: '000660.KS', market: '韓股', currency: 'KRW', percent: 10 },
-  { id: 'NVDA', name: 'NVIDIA', symbol: 'NVDA', market: '美股', currency: 'USD', percent: 7 },
-  { id: '2308', name: '台達電', symbol: '2308.TW', market: '台股', currency: 'TWD', percent: 7 },
-  { id: '2383', name: '台光電', symbol: '2383.TW', market: '台股', currency: 'TWD', percent: 5 },
-  { id: '3017', name: '奇鋐', symbol: '3017.TW', market: '台股', currency: 'TWD', percent: 5 },
-  { id: 'MU', name: 'Micron', symbol: 'MU', market: '美股', currency: 'USD', percent: 5 },
-  { id: 'AVGO', name: 'Broadcom', symbol: 'AVGO', market: '美股', currency: 'USD', percent: 3 },
-  { id: '3324', name: '雙鴻', symbol: '3324.TWO', market: '上櫃', currency: 'TWD', percent: 3 },
-  { id: '2368', name: '金像電', symbol: '2368.TW', market: '台股', currency: 'TWD', percent: 3 },
-  { id: '3037', name: '欣興', symbol: '3037.TW', market: '台股', currency: 'TWD', percent: 2 },
+  { id: '2330', name: '台積電', symbol: '2330.TW', market: '台股', currency: 'TWD', category: '晶圓代工', percent: 25 },
+  { id: 'TSM', name: 'TSM ADR', symbol: 'TSM', market: '美股', currency: 'USD', category: '晶圓代工', percent: 25 },
+  { id: 'HYNIX', name: 'SK hynix', symbol: '000660.KS', market: '韓股', currency: 'KRW', category: '記憶體', percent: 10 },
+  { id: 'NVDA', name: 'NVIDIA', symbol: 'NVDA', market: '美股', currency: 'USD', category: 'IC設計', percent: 7 },
+  { id: '2308', name: '台達電', symbol: '2308.TW', market: '台股', currency: 'TWD', category: '電源', percent: 7 },
+  { id: '2383', name: '台光電', symbol: '2383.TW', market: '台股', currency: 'TWD', category: '銅箔基板', percent: 5 },
+  { id: '3017', name: '奇鋐', symbol: '3017.TW', market: '台股', currency: 'TWD', category: '散熱', percent: 5 },
+  { id: 'MU', name: 'Micron', symbol: 'MU', market: '美股', currency: 'USD', category: '記憶體', percent: 5 },
+  { id: 'AVGO', name: 'Broadcom', symbol: 'AVGO', market: '美股', currency: 'USD', category: 'IC設計', percent: 3 },
+  { id: '3324', name: '雙鴻', symbol: '3324.TWO', market: '上櫃', currency: 'TWD', category: '散熱', percent: 3 },
+  { id: '2368', name: '金像電', symbol: '2368.TW', market: '台股', currency: 'TWD', category: 'PCB/載板', percent: 3 },
+  { id: '3037', name: '欣興', symbol: '3037.TW', market: '台股', currency: 'TWD', category: 'PCB/載板', percent: 2 },
 ];
 
 const CURRENCIES = ['TWD', 'USD', 'KRW', 'JPY', 'HKD'];
+
+// 類別配色（依 dataviz 調色盤固定順序，第 9 種以後歸為灰色）
+const CATEGORY_PALETTE_LIGHT = ['#2a78d6', '#1baf7a', '#eda100', '#008300', '#4a3aa7', '#e34948', '#e87ba4', '#eb6834'];
+const CATEGORY_PALETTE_DARK = ['#3987e5', '#199e70', '#c98500', '#008300', '#9085e9', '#e66767', '#d55181', '#d95926'];
+const CATEGORY_OTHER_COLOR = '#898781';
+
+function isDarkMode() {
+  return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+}
+
+// 依標的清單中類別首次出現的順序，穩定地分配顏色
+function categoryColorMap() {
+  const palette = isDarkMode() ? CATEGORY_PALETTE_DARK : CATEGORY_PALETTE_LIGHT;
+  const order = [];
+  for (const s of state.stocks) {
+    const c = s.category || '未分類';
+    if (!order.includes(c)) order.push(c);
+  }
+  const map = {};
+  order.forEach((c, i) => {
+    map[c] = i < palette.length ? palette[i] : CATEGORY_OTHER_COLOR;
+  });
+  return { map, order };
+}
+
+// 圓餅圖佔比基準
+let chartBasis = null; // 'target' | 'invested' | 'value'
+let basisLocked = false; // 使用者手動點選後鎖定，不再自動挑選
+const BASIS = {
+  target: { label: '目標配置', valueOf: (r) => Number(r.stock.percent) || 0, fmtVal: (v) => fmtNum(v, 1) + '%' },
+  invested: { label: '投入成本', valueOf: (r) => r.invested ?? 0, fmtVal: (v) => fmtTWD(v) },
+  value: { label: '目前市值', valueOf: (r) => r.valueTWD ?? 0, fmtVal: (v) => fmtTWD(v) },
+};
 
 // 該幣別換算台幣的 Yahoo 匯率代號（USD 用 TWD=X，其餘用 <幣別>TWD=X）
 function fxSymbolOf(currency) {
@@ -62,7 +95,13 @@ const tickerOf = (symbol) => String(symbol).split('.')[0];
 // ---------- 資料存取 ----------
 function applyDoc(data) {
   state.transactions = Array.isArray(data.transactions) ? data.transactions : [];
-  if (Array.isArray(data.stocks) && data.stocks.length) state.stocks = data.stocks;
+  if (Array.isArray(data.stocks) && data.stocks.length) {
+    // 舊資料可能沒有 category 欄位，依 id 對回預設分類，找不到則標為「未分類」
+    state.stocks = data.stocks.map((s) => ({
+      ...s,
+      category: s.category || DEFAULT_STOCKS.find((d) => d.id === s.id)?.category || '未分類',
+    }));
+  }
   if (Number(data.budget) > 0) state.budget = Number(data.budget);
 }
 
@@ -220,6 +259,7 @@ function render() {
   bar.classList.toggle('over', overallProgress > 1);
 
   renderHoldings(rows, totalInvested, totalValue, totalPnl);
+  renderDonut(rows);
   renderTransactions();
 
   $('fx-info').textContent = [...new Set(state.stocks.map((s) => s.currency))]
@@ -286,6 +326,155 @@ function renderHoldings(rows, totalInvested, totalValue, totalPnl) {
     </tr>`;
 }
 
+// ---------- 圓餅圖（甜甜圈）----------
+function polar(cx, cy, r, angleDeg) {
+  const a = ((angleDeg - 90) * Math.PI) / 180; // 0 度指向正上方，順時針遞增
+  return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+}
+
+function arcPath(cx, cy, rO, rI, a0, a1) {
+  const large = a1 - a0 > 180 ? 1 : 0;
+  const [ox0, oy0] = polar(cx, cy, rO, a0);
+  const [ox1, oy1] = polar(cx, cy, rO, a1);
+  const [ix1, iy1] = polar(cx, cy, rI, a1);
+  const [ix0, iy0] = polar(cx, cy, rI, a0);
+  return `M ${ox0} ${oy0} A ${rO} ${rO} 0 ${large} 1 ${ox1} ${oy1} L ${ix1} ${iy1} A ${rI} ${rI} 0 ${large} 0 ${ix0} ${iy0} Z`;
+}
+
+function ringPath(cx, cy, rO, rI) {
+  return (
+    `M ${cx - rO} ${cy} a ${rO} ${rO} 0 1 0 ${rO * 2} 0 a ${rO} ${rO} 0 1 0 ${-rO * 2} 0 Z ` +
+    `M ${cx - rI} ${cy} a ${rI} ${rI} 0 1 1 ${rI * 2} 0 a ${rI} ${rI} 0 1 1 ${-rI * 2} 0 Z`
+  );
+}
+
+function renderDonut(rows) {
+  // 使用者未手動點選前，自動挑選最佳基準：有市值優先市值，其次投入成本，再其次目標配置
+  if (!basisLocked) {
+    const tV = rows.reduce((s, r) => s + (r.valueTWD ?? 0), 0);
+    const tI = rows.reduce((s, r) => s + (r.invested ?? 0), 0);
+    chartBasis = tV > 0 ? 'value' : tI > 0 ? 'invested' : 'target';
+  }
+  // 更新基準切換鈕的選取狀態
+  document.querySelectorAll('#basis-control button').forEach((b) => {
+    b.classList.toggle('active', b.dataset.basis === chartBasis);
+  });
+
+  const basis = BASIS[chartBasis];
+  const { map: colorMap, order: catOrder } = categoryColorMap();
+
+  // 依「類別出現順序」排序標的，讓同類別的切片相鄰、視覺上形成一個類別扇形
+  const ordered = [...rows].sort((a, b) => {
+    const ca = catOrder.indexOf(a.stock.category || '未分類');
+    const cb = catOrder.indexOf(b.stock.category || '未分類');
+    return ca - cb;
+  });
+
+  const slices = ordered
+    .map((r) => ({
+      row: r,
+      cat: r.stock.category || '未分類',
+      color: colorMap[r.stock.category || '未分類'],
+      value: basis.valueOf(r),
+    }))
+    .filter((s) => s.value > 0);
+
+  const total = slices.reduce((s, x) => s + x.value, 0);
+
+  const donutEl = $('donut');
+  const cx = 160;
+  const cy = 160;
+  const rO = 140;
+  const rI = 88;
+
+  if (total <= 0) {
+    donutEl.innerHTML = `<div class="donut-empty">目前${basis.label}為 0，<br>尚無資料可顯示</div>`;
+    $('donut-legend').innerHTML = '';
+    return;
+  }
+
+  let angle = 0;
+  let paths = '';
+  for (const s of slices) {
+    const sweep = (s.value / total) * 360;
+    const a0 = angle;
+    const a1 = angle + sweep;
+    const pct = s.value / total;
+    const d = sweep >= 359.999 ? ringPath(cx, cy, rO, rI) : arcPath(cx, cy, rO, rI, a0, a1);
+    const rule = sweep >= 359.999 ? ' fill-rule="evenodd"' : '';
+    const label = `${s.row.stock.name}（${s.cat}）\n${basis.fmtVal(s.value)}・${fmtPct(pct)}`;
+    paths += `<path d="${d}"${rule} fill="${s.color}" stroke="var(--surface)" stroke-width="2" stroke-linejoin="round" data-label="${esc(label)}">`;
+    paths += `<title>${esc(label)}</title></path>`;
+    // 佔比 ≥ 8% 的切片直接標示股票簡稱
+    if (pct >= 0.08 && sweep < 359.999) {
+      const mid = (a0 + a1) / 2;
+      const [lx, ly] = polar(cx, cy, (rO + rI) / 2, mid);
+      paths += `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" class="slice-label" text-anchor="middle" dominant-baseline="central">${esc(
+        s.row.stock.name
+      )}</text>`;
+    }
+    angle = a1;
+  }
+
+  const centerNum = chartBasis === 'target' ? fmtTWD(state.budget) : fmtTWD(total);
+  donutEl.innerHTML = `
+    <svg viewBox="0 0 320 320" class="donut-svg" role="img" aria-label="資產類別配置圓餅圖">
+      ${paths}
+      <text x="160" y="150" text-anchor="middle" class="donut-center-label">${basis.label}</text>
+      <text x="160" y="176" text-anchor="middle" class="donut-center-value">${centerNum}</text>
+    </svg>
+    <div class="donut-tooltip" id="donut-tooltip" hidden></div>`;
+
+  renderDonutLegend(ordered, colorMap, catOrder, basis, total);
+  bindDonutTooltip();
+}
+
+function renderDonutLegend(ordered, colorMap, catOrder, basis, total) {
+  const legend = $('donut-legend');
+  let html = '';
+  for (const cat of catOrder) {
+    const members = ordered.filter((r) => (r.stock.category || '未分類') === cat);
+    const catValue = members.reduce((s, r) => s + basis.valueOf(r), 0);
+    const catPct = total > 0 ? catValue / total : 0;
+    const memberHtml = members
+      .map((r) => {
+        const v = basis.valueOf(r);
+        const p = total > 0 ? v / total : 0;
+        return `<span class="legend-member${v <= 0 ? ' zero' : ''}">${esc(r.stock.name)} ${fmtPct(p)}</span>`;
+      })
+      .join('<span class="legend-dot">·</span>');
+    html += `
+      <div class="legend-group">
+        <div class="legend-head">
+          <span class="legend-swatch" style="background:${colorMap[cat]}"></span>
+          <span class="legend-cat">${esc(cat)}</span>
+          <span class="legend-cat-pct">${fmtPct(catPct)}</span>
+        </div>
+        <div class="legend-members">${memberHtml}</div>
+      </div>`;
+  }
+  legend.innerHTML = html;
+}
+
+function bindDonutTooltip() {
+  const svg = $('donut').querySelector('.donut-svg');
+  const tip = $('donut-tooltip');
+  if (!svg || !tip) return;
+  const wrap = $('donut');
+  svg.querySelectorAll('path').forEach((p) => {
+    p.addEventListener('mousemove', (e) => {
+      tip.textContent = p.dataset.label;
+      tip.hidden = false;
+      const rect = wrap.getBoundingClientRect();
+      tip.style.left = e.clientX - rect.left + 12 + 'px';
+      tip.style.top = e.clientY - rect.top + 12 + 'px';
+    });
+    p.addEventListener('mouseleave', () => {
+      tip.hidden = true;
+    });
+  });
+}
+
 function renderTransactions() {
   const body = $('tx-body');
   body.innerHTML = '';
@@ -319,7 +508,7 @@ function rebuildStockSelect() {
 }
 
 // ---------- 標的編輯 ----------
-function editorRow(s = { id: '', name: '', symbol: '', market: '台股', currency: 'TWD', percent: 0 }) {
+function editorRow(s = { id: '', name: '', symbol: '', market: '台股', currency: 'TWD', category: '', percent: 0 }) {
   const tr = document.createElement('tr');
   tr.dataset.id = s.id;
   const currencyOptions = CURRENCIES.map(
@@ -329,10 +518,18 @@ function editorRow(s = { id: '', name: '', symbol: '', market: '台股', currenc
     <td><input class="e-name" value="${esc(s.name)}" placeholder="名稱"></td>
     <td><input class="e-symbol" value="${esc(s.symbol)}" placeholder="如 2330.TW"></td>
     <td><input class="e-market" value="${esc(s.market)}" placeholder="台股"></td>
+    <td><input class="e-category" list="category-list" value="${esc(s.category || '')}" placeholder="如 記憶體"></td>
     <td><select class="e-currency">${currencyOptions}</select></td>
     <td class="num"><input class="e-percent" type="number" step="any" min="0" value="${Number(s.percent) || 0}"></td>
     <td><button type="button" class="tx-del e-del" title="刪除標的">✕</button></td>`;
   return tr;
+}
+
+function refreshCategoryDatalist() {
+  const dl = $('category-list');
+  if (!dl) return;
+  const cats = [...new Set(state.stocks.map((s) => s.category).filter(Boolean))];
+  dl.innerHTML = cats.map((c) => `<option value="${esc(c)}"></option>`).join('');
 }
 
 function updateEditorTotal() {
@@ -347,6 +544,7 @@ function updateEditorTotal() {
 
 function openEditor() {
   $('edit-budget').value = state.budget;
+  refreshCategoryDatalist();
   const body = $('editor-body');
   body.innerHTML = '';
   for (const s of state.stocks) body.appendChild(editorRow(s));
@@ -387,6 +585,7 @@ function saveEditor() {
       name,
       symbol,
       market: q('.e-market').value.trim() || '—',
+      category: q('.e-category').value.trim() || '未分類',
       currency: q('.e-currency').value,
       percent: parseFloat(q('.e-percent').value) || 0,
     });
@@ -481,6 +680,19 @@ function initForm() {
     btn.disabled = false;
     btn.textContent = '↻ 更新報價';
   });
+
+  $('basis-control').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-basis]');
+    if (!btn) return;
+    chartBasis = btn.dataset.basis;
+    basisLocked = true;
+    render();
+  });
+
+  // 深色/淺色切換時重畫圓餅圖以套用對應配色
+  if (window.matchMedia) {
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', render);
+  }
 
   $('export-btn').addEventListener('click', () => {
     const doc = { budget: state.budget, stocks: state.stocks, transactions: state.transactions };
