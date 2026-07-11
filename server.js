@@ -5,39 +5,80 @@ const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Railway 的檔案系統重啟後會清空；掛載 Volume 時把 DATA_DIR 指到掛載點即可保留資料
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
-const DATA_FILE = path.join(DATA_DIR, 'portfolio.json');
-
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-function readData() {
+// ---- 資料儲存：有 DATABASE_URL（Railway Postgres 自動注入）就用 Postgres，
+//      否則存本機 JSON 檔（Railway 檔案系統重新部署會清空，僅適合本機開發）----
+let readData;
+let writeData;
+
+if (process.env.DATABASE_URL) {
+  const { Pool } = require('pg');
+  const url = process.env.DATABASE_URL;
+  // Railway 內部網址（railway.internal）與本機不走 SSL；對外網址需要 SSL
+  const needSSL = !/railway\.internal|localhost|127\.0\.0\.1/.test(url);
+  const pool = new Pool({
+    connectionString: url,
+    ssl: needSSL ? { rejectUnauthorized: false } : false,
+  });
+  const ready = pool
+    .query('CREATE TABLE IF NOT EXISTS portfolio (id INTEGER PRIMARY KEY, data JSONB NOT NULL)')
+    .then(() => console.log('儲存後端：Postgres'));
+
+  readData = async () => {
+    await ready;
+    const r = await pool.query('SELECT data FROM portfolio WHERE id = 1');
+    return r.rows[0]?.data ?? { transactions: [] };
+  };
+  writeData = async (data) => {
+    await ready;
+    await pool.query(
+      'INSERT INTO portfolio (id, data) VALUES (1, $1) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data',
+      [JSON.stringify(data)]
+    );
+  };
+} else {
+  const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+  const DATA_FILE = path.join(DATA_DIR, 'portfolio.json');
+  console.log('儲存後端：JSON 檔案（未設定 DATABASE_URL）');
+
+  readData = async () => {
+    try {
+      return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    } catch {
+      return { transactions: [] };
+    }
+  };
+  writeData = async (data) => {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    const tmp = DATA_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+    fs.renameSync(tmp, DATA_FILE);
+  };
+}
+
+app.get('/api/portfolio', async (req, res) => {
   try {
-    return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-  } catch {
-    return { transactions: [] };
+    res.json(await readData());
+  } catch (err) {
+    console.error('讀取失敗：', err.message);
+    res.status(500).json({ error: '讀取資料失敗' });
   }
-}
-
-function writeData(data) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  const tmp = DATA_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
-  fs.renameSync(tmp, DATA_FILE);
-}
-
-app.get('/api/portfolio', (req, res) => {
-  res.json(readData());
 });
 
-app.put('/api/portfolio', (req, res) => {
+app.put('/api/portfolio', async (req, res) => {
   const body = req.body;
   if (!body || !Array.isArray(body.transactions)) {
     return res.status(400).json({ error: 'transactions 必須是陣列' });
   }
-  writeData({ transactions: body.transactions });
-  res.json({ ok: true });
+  try {
+    await writeData({ transactions: body.transactions });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('寫入失敗：', err.message);
+    res.status(500).json({ error: '寫入資料失敗' });
+  }
 });
 
 // ---- 報價代理（Yahoo Finance）----

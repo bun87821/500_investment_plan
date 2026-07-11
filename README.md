@@ -42,10 +42,8 @@ npm start
 ## 部署到 Railway
 
 1. 將此 repo 連結到 Railway 新專案，Railway 會自動偵測 Node.js 並執行 `npm start`（`PORT` 由 Railway 自動注入）。
-2. **重要：** 交易紀錄存在伺服器的 `data/portfolio.json`。Railway 的檔案系統在每次重新部署後會清空，若要永久保存請：
-   - 在 Railway 服務上掛載 **Volume**（例如掛載到 `/data`），並設定環境變數 `DATA_DIR=/data`；或
-   - 定期用頁面右上角的「匯出備份」下載 JSON，重新部署後再「匯入備份」。
-   - （即使沒有 Volume，頁面也會在瀏覽器 localStorage 保留一份備份，伺服器資料遺失時會自動還原。）
+2. 在專案內新增 **PostgreSQL**，並確認應用服務的 Variables 有 `DATABASE_URL`（Railway 通常會自動建立參照；若沒有，手動加上 `DATABASE_URL = ${{Postgres.DATABASE_URL}}`）。有 `DATABASE_URL` 時交易紀錄存進 Postgres，重新部署也不會遺失。
+3. 未設定 `DATABASE_URL` 時退回本機 JSON 檔（`data/portfolio.json`，可用 `DATA_DIR` 改路徑）——僅適合本機開發，Railway 重新部署會清空。頁面另會在瀏覽器 localStorage 留一份備份，伺服器資料遺失時會自動還原。
 
 ## API
 
