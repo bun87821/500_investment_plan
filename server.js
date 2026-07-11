@@ -243,6 +243,64 @@ async function fetchQuote(symbol) {
   return data;
 }
 
+function inferCurrency(symbol, currency) {
+  if (currency) return currency;
+  if (symbol.endsWith('.TW') || symbol.endsWith('.TWO')) return 'TWD';
+  if (symbol.endsWith('.KS')) return 'KRW';
+  if (symbol.endsWith('.T')) return 'JPY';
+  if (symbol.endsWith('.HK')) return 'HKD';
+  return 'USD';
+}
+
+function normalizeSymbolResult(x) {
+  return {
+    symbol: x.symbol,
+    name: x.shortname || x.longname || x.name || x.symbol,
+    market: x.exchDisp || x.exchange || x.exch || x.typeDisp || '—',
+    currency: inferCurrency(x.symbol, x.currency),
+  };
+}
+
+app.get('/api/symbol-search', async (req, res) => {
+  const q = String(req.query.q || '').trim().slice(0, 80);
+  if (q.length < 2) return res.status(400).json({ error: '請輸入至少 2 個字' });
+
+  try {
+    const urls = [
+      'https://tw.stock.yahoo.com/_td-stock/api/resource/AutocompleteService;query=' + encodeURIComponent(q),
+      'https://query2.finance.yahoo.com/v1/finance/search?quotesCount=8&newsCount=0&listsCount=0&q=' +
+        encodeURIComponent(q),
+    ];
+    const responses = await Promise.allSettled(
+      urls.map(async (url) => {
+        const resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (portfolio-tracker)' } });
+        if (!resp.ok) throw new Error(`Yahoo 回應 ${resp.status}`);
+        return resp.json();
+      })
+    );
+
+    const twResults = responses[0].status === 'fulfilled' ? responses[0].value?.ResultSet?.Result || [] : [];
+    const globalResults = responses[1].status === 'fulfilled' ? responses[1].value?.quotes || [] : [];
+    const seen = new Set();
+    const results = [...twResults, ...globalResults]
+      .filter((x) => {
+        if (!x.symbol || seen.has(x.symbol)) return false;
+        seen.add(x.symbol);
+        return true;
+      })
+      .filter((x) => !x.quoteType || x.quoteType === 'EQUITY' || x.quoteType === 'ETF')
+      .filter((x) => x.exchange !== 'OPR' && x.exch !== 'OPR' && x.type !== 'O')
+      .filter((x) => !/[A-Z]{1,6}\d{6}[CP]\d{8}/.test(x.symbol))
+      .filter((x) => !/[購售牛熊]/.test(x.name || x.shortname || x.longname || ''))
+      .map(normalizeSymbolResult)
+      .slice(0, 8);
+    res.json({ results });
+  } catch (err) {
+    console.error('Yahoo 代號搜尋失敗：', err.message);
+    res.status(502).json({ error: 'Yahoo 代號搜尋失敗' });
+  }
+});
+
 app.get('/api/quotes', async (req, res) => {
   const symbols = String(req.query.symbols || '')
     .split(',')

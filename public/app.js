@@ -589,13 +589,74 @@ function editorRow(s = { id: '', name: '', symbol: '', market: '台股', currenc
   ).join('');
   tr.innerHTML = `
     <td><input class="e-name" value="${esc(s.name)}" placeholder="名稱"></td>
-    <td><input class="e-symbol" value="${esc(s.symbol)}" placeholder="如 2330.TW"></td>
+    <td>
+      <div class="symbol-field">
+        <input class="e-symbol" value="${esc(s.symbol)}" placeholder="如 2330.TW">
+        <button type="button" class="btn btn-ghost symbol-search" title="查 Yahoo 代號">查</button>
+      </div>
+      <div class="symbol-results" hidden></div>
+    </td>
     <td><input class="e-market" value="${esc(s.market)}" placeholder="台股"></td>
     <td><input class="e-category" list="category-list" value="${esc(s.category || '')}" placeholder="如 記憶體"></td>
     <td><select class="e-currency">${currencyOptions}</select></td>
     <td class="num"><input class="e-percent" type="number" step="any" min="0" value="${Number(s.percent) || 0}"></td>
     <td><button type="button" class="tx-del e-del" title="刪除標的">✕</button></td>`;
   return tr;
+}
+
+async function searchSymbolForRow(tr) {
+  const name = tr.querySelector('.e-name').value.trim();
+  const symbol = tr.querySelector('.e-symbol').value.trim();
+  const query = name || symbol;
+  const resultsEl = tr.querySelector('.symbol-results');
+  if (query.length < 2) {
+    resultsEl.textContent = '請先輸入名稱或代號關鍵字';
+    resultsEl.hidden = false;
+    return;
+  }
+
+  const btn = tr.querySelector('.symbol-search');
+  btn.disabled = true;
+  btn.textContent = '查詢中';
+  resultsEl.textContent = '';
+  resultsEl.hidden = true;
+  try {
+    const res = await fetch('/api/symbol-search?q=' + encodeURIComponent(query));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '查詢失敗');
+    const results = data.results || [];
+    if (!results.length) {
+      resultsEl.textContent = '找不到符合的 Yahoo 代號';
+    } else {
+      resultsEl.innerHTML = results
+        .map(
+          (r) => `
+            <button type="button" class="symbol-result" data-symbol="${esc(r.symbol)}" data-name="${esc(r.name)}" data-market="${esc(r.market)}" data-currency="${esc(r.currency)}">
+              <strong>${esc(r.symbol)}</strong>
+              <span>${esc(r.name)}</span>
+              <small>${esc(r.market)}・${esc(r.currency)}</small>
+            </button>`
+        )
+        .join('');
+    }
+    resultsEl.hidden = false;
+  } catch (err) {
+    resultsEl.textContent = err.message || '查詢失敗，請稍後再試';
+    resultsEl.hidden = false;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '查';
+  }
+}
+
+function applySymbolResult(btn) {
+  const tr = btn.closest('tr');
+  tr.querySelector('.e-symbol').value = btn.dataset.symbol || '';
+  tr.querySelector('.e-name').value = btn.dataset.name || btn.dataset.symbol || '';
+  tr.querySelector('.e-market').value = btn.dataset.market || '—';
+  const currency = btn.dataset.currency;
+  if (CURRENCIES.includes(currency)) tr.querySelector('.e-currency').value = currency;
+  tr.querySelector('.symbol-results').hidden = true;
 }
 
 function refreshCategoryDatalist() {
@@ -613,6 +674,47 @@ function updateEditorTotal() {
   const el = $('editor-total');
   el.textContent = '比例合計 ' + fmtNum(total, 1) + '%';
   el.className = Math.abs(total - 100) < 0.01 ? 'editor-total ok' : 'editor-total warn';
+}
+
+function setPercentInput(input, value) {
+  input.value = (Math.round(value * 100) / 100).toFixed(2).replace(/\.?0+$/, '');
+}
+
+function rebalanceEditorPercent(changedInput) {
+  const rows = [...document.querySelectorAll('#editor-body tr')];
+  if (rows.length <= 1) return;
+
+  const changed = Math.max(0, Math.min(100, parseFloat(changedInput.value) || 0));
+  setPercentInput(changedInput, changed);
+
+  const otherInputs = rows
+    .map((tr) => tr.querySelector('.e-percent'))
+    .filter((input) => input && input !== changedInput);
+  const otherTotal = otherInputs.reduce((sum, input) => sum + (parseFloat(input.value) || 0), 0);
+  if (otherTotal <= 0) return;
+
+  const targetOtherTotal = 100 - changed;
+  let assigned = 0;
+  otherInputs.forEach((input, index) => {
+    const next =
+      index === otherInputs.length - 1
+        ? Math.max(0, targetOtherTotal - assigned)
+        : ((parseFloat(input.value) || 0) / otherTotal) * targetOtherTotal;
+    setPercentInput(input, next);
+    assigned += parseFloat(input.value) || 0;
+  });
+}
+
+function normalizeEditorPercents() {
+  const inputs = [...document.querySelectorAll('#editor-body .e-percent')];
+  const total = inputs.reduce((sum, input) => sum + (parseFloat(input.value) || 0), 0);
+  if (!inputs.length || total <= 0) return;
+  let assigned = 0;
+  inputs.forEach((input, index) => {
+    const next = index === inputs.length - 1 ? Math.max(0, 100 - assigned) : ((parseFloat(input.value) || 0) / total) * 100;
+    setPercentInput(input, next);
+    assigned += parseFloat(input.value) || 0;
+  });
 }
 
 function openEditor() {
@@ -689,13 +791,31 @@ function initEditor() {
   $('editor-cancel').addEventListener('click', closeEditor);
   $('editor-save').addEventListener('click', saveEditor);
   $('editor-add').addEventListener('click', () => {
-    $('editor-body').appendChild(editorRow());
+    const row = editorRow();
+    $('editor-body').appendChild(row);
+    row.querySelector('.e-percent').focus();
     updateEditorTotal();
   });
   $('editor-body').addEventListener('input', (e) => {
     if (e.target.classList.contains('e-percent')) updateEditorTotal();
   });
+  $('editor-body').addEventListener('change', (e) => {
+    if (e.target.classList.contains('e-percent')) {
+      rebalanceEditorPercent(e.target);
+      updateEditorTotal();
+    }
+  });
   $('editor-body').addEventListener('click', (e) => {
+    const searchBtn = e.target.closest('.symbol-search');
+    if (searchBtn) {
+      searchSymbolForRow(searchBtn.closest('tr'));
+      return;
+    }
+    const resultBtn = e.target.closest('.symbol-result');
+    if (resultBtn) {
+      applySymbolResult(resultBtn);
+      return;
+    }
     const btn = e.target.closest('.e-del');
     if (!btn) return;
     const tr = btn.closest('tr');
@@ -705,6 +825,7 @@ function initEditor() {
       return;
     }
     tr.remove();
+    normalizeEditorPercents();
     updateEditorTotal();
   });
 }
