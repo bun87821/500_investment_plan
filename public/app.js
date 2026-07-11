@@ -46,6 +46,7 @@ function categoryColorMap() {
 // 圓餅圖佔比基準
 let chartBasis = null; // 'target' | 'invested' | 'value'
 let basisLocked = false; // 使用者手動點選後鎖定，不再自動挑選
+let allocationCollapsed = localStorage.getItem('allocation-collapsed') === '1';
 const BASIS = {
   target: { label: '目標配置', valueOf: (r) => Number(r.stock.percent) || 0, fmtVal: (v) => fmtNum(v, 1) + '%' },
   invested: { label: '投入成本', valueOf: (r) => r.invested ?? 0, fmtVal: (v) => fmtTWD(v) },
@@ -298,6 +299,7 @@ function render() {
   bar.style.width = Math.min(overallProgress * 100, 100) + '%';
   bar.classList.toggle('over', overallProgress > 1);
 
+  renderAllocationCollapsed();
   renderHoldings(rows, totalInvested, totalValue, totalPnl);
   renderDonut(rows);
   renderTransactions();
@@ -323,27 +325,27 @@ function renderHoldings(rows, totalInvested, totalValue, totalPnl) {
     const tr = document.createElement('tr');
     const priceDigits = stock.currency === 'KRW' || stock.currency === 'JPY' ? 0 : 2;
     tr.innerHTML = `
-      <td>
+      <td class="holding-main" data-label="標的">
         <div class="stock-name">${esc(stock.name)}</div>
         <div class="stock-meta"><span>${esc(tickerOf(stock.symbol))}</span><span class="chip">${esc(stock.market)}</span></div>
       </td>
-      <td class="num">${fmtNum(stock.percent, 1)}%<span class="cell-sub">${fmtTWD(r.targetTWD)}</span></td>
-      <td class="num">${r.shares ? fmtNum(r.shares, 4) : '—'}</td>
-      <td class="num">${r.avgCost != null ? fmtNum(r.avgCost, priceDigits) : '—'}</td>
-      <td class="num">${fmtTWD(r.invested)}</td>
-      <td>
+      <td class="num" data-label="目標配置">${fmtNum(stock.percent, 1)}%<span class="cell-sub">${fmtTWD(r.targetTWD)}</span></td>
+      <td class="num" data-label="持有股數">${r.shares ? fmtNum(r.shares, 4) : '—'}</td>
+      <td class="num" data-label="平均成本">${r.avgCost != null ? fmtNum(r.avgCost, priceDigits) : '—'}</td>
+      <td class="num" data-label="投入成本">${fmtTWD(r.invested)}</td>
+      <td data-label="投入進度">
         <div class="progress-cell">
           <div class="bar-track"><div class="bar-fill ${r.progress > 1 ? 'over' : ''}" style="width:${Math.min((r.progress ?? 0) * 100, 100)}%"></div></div>
           <span class="pct">${fmtPct(r.progress)}${r.invested != null ? '，還差 ' + fmtTWD(Math.max(r.targetTWD - r.invested, 0)) : ''}</span>
         </div>
       </td>
-      <td class="num">${r.price != null ? fmtNum(r.price, priceDigits) : '—'}${
+      <td class="num" data-label="現價">${r.price != null ? fmtNum(r.price, priceDigits) : '—'}${
         r.dayChange != null
           ? `<span class="cell-sub ${pnlClass(r.dayChange)}">${signed(r.dayChange, (n) => fmtPct(n, 2))}</span>`
           : ''
       }</td>
-      <td class="num">${fmtTWD(r.valueTWD)}</td>
-      <td class="num ${pnlClass(r.pnl ?? 0)}">${r.pnl != null ? signed(r.pnl, (n) => fmtTWD(n)) : '—'}${
+      <td class="num" data-label="市值">${fmtTWD(r.valueTWD)}</td>
+      <td class="num ${pnlClass(r.pnl ?? 0)}" data-label="未實現損益">${r.pnl != null ? signed(r.pnl, (n) => fmtTWD(n)) : '—'}${
         r.pnl != null && r.invested > 0
           ? `<span class="cell-sub ${pnlClass(r.pnl)}">${signed(r.pnl / r.invested, fmtPct)}</span>`
           : ''
@@ -367,6 +369,15 @@ function renderHoldings(rows, totalInvested, totalValue, totalPnl) {
 }
 
 // ---------- 圓餅圖（甜甜圈）----------
+function renderAllocationCollapsed() {
+  const content = $('allocation-content');
+  const toggle = $('allocation-toggle');
+  if (!content || !toggle) return;
+  content.hidden = allocationCollapsed;
+  toggle.textContent = allocationCollapsed ? '展開' : '收合';
+  toggle.setAttribute('aria-expanded', String(!allocationCollapsed));
+}
+
 function polar(cx, cy, r, angleDeg) {
   const a = ((angleDeg - 90) * Math.PI) / 180; // 0 度指向正上方，順時針遞增
   return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
@@ -881,6 +892,12 @@ function initForm() {
     chartBasis = btn.dataset.basis;
     basisLocked = true;
     render();
+  });
+
+  $('allocation-toggle').addEventListener('click', () => {
+    allocationCollapsed = !allocationCollapsed;
+    localStorage.setItem('allocation-collapsed', allocationCollapsed ? '1' : '0');
+    renderAllocationCollapsed();
   });
 
   // 深色/淺色切換時重畫圓餅圖以套用對應配色

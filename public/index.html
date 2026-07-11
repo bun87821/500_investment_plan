@@ -77,20 +77,25 @@
       </div>
     </section>
 
-    <section class="card">
+    <section class="card allocation-card" id="allocation-card">
       <div class="card-head">
         <h2>資產類別配置</h2>
-        <div class="segmented" id="basis-control">
-          <button type="button" data-basis="target">目標配置</button>
-          <button type="button" data-basis="invested">投入成本</button>
-          <button type="button" data-basis="value">目前市值</button>
+        <div class="chart-actions">
+          <div class="segmented" id="basis-control">
+            <button type="button" data-basis="target">目標配置</button>
+            <button type="button" data-basis="invested">投入成本</button>
+            <button type="button" data-basis="value">目前市值</button>
+          </div>
+          <button type="button" id="allocation-toggle" class="btn btn-ghost" aria-expanded="true">收合</button>
         </div>
       </div>
-      <div class="donut-wrap">
-        <div class="donut" id="donut"></div>
-        <div class="donut-legend" id="donut-legend"></div>
+      <div id="allocation-content">
+        <div class="donut-wrap">
+          <div class="donut" id="donut"></div>
+          <div class="donut-legend" id="donut-legend"></div>
+        </div>
+        <p class="hint">切片依「類別」上色，同類別的標的相鄰形成一個扇形；滑鼠移到切片可看明細。可在「✎ 編輯標的」修改每檔標的的類別。</p>
       </div>
-      <p class="hint">切片依「類別」上色，同類別的標的相鄰形成一個扇形；滑鼠移到切片可看明細。可在「✎ 編輯標的」修改每檔標的的類別。</p>
     </section>
 
     <section class="card" id="editor-card" hidden>

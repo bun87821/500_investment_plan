@@ -136,6 +136,12 @@ h1 { font-size: 1.5rem; font-weight: 700; }
   margin-bottom: 12px;
 }
 .card-head h2 { margin-bottom: 0; }
+.chart-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 
 /* 分段切換鈕 */
 .segmented {
@@ -251,21 +257,18 @@ h1 { font-size: 1.5rem; font-weight: 700; }
   min-width: 220px;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 10px;
+  gap: 8px 22px;
 }
 .legend-group {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  border: 1px solid var(--soft-border);
-  border-radius: 8px;
-  padding: 10px 11px;
-  background: color-mix(in srgb, var(--surface) 82%, var(--page));
-  transition: opacity 0.16s ease, border-color 0.16s ease, transform 0.16s ease;
+  padding: 3px 0 11px;
+  border-bottom: 1px solid var(--soft-border);
+  transition: opacity 0.16s ease, transform 0.16s ease;
 }
 .legend-group.is-muted { opacity: 0.42; }
 .legend-group.is-active {
-  border-color: var(--baseline);
   transform: translateY(-1px);
 }
 .legend-head {
@@ -294,10 +297,10 @@ h1 { font-size: 1.5rem; font-weight: 700; }
   font-variant-numeric: tabular-nums;
 }
 .legend-track {
-  height: 5px;
+  height: 4px;
   overflow: hidden;
   border-radius: 999px;
-  background: var(--grid);
+  background: color-mix(in srgb, var(--grid) 72%, transparent);
 }
 .legend-track span {
   display: block;
@@ -332,6 +335,97 @@ h1 { font-size: 1.5rem; font-weight: 700; }
   }
   .donut-legend {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .allocation-card .card-head {
+    align-items: flex-start;
+  }
+  .chart-actions {
+    width: 100%;
+  }
+  .chart-actions .segmented {
+    flex: 1 1 100%;
+  }
+  .chart-actions .segmented button {
+    flex: 1;
+    padding-inline: 8px;
+  }
+
+  .holdings {
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+  .holdings thead {
+    display: none;
+  }
+  .holdings tbody {
+    display: grid;
+    gap: 10px;
+  }
+  .holdings tbody tr {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 9px 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    background: color-mix(in srgb, var(--surface) 88%, var(--page));
+  }
+  .holdings tbody tr:hover {
+    background: color-mix(in srgb, var(--series-1) 4%, var(--surface));
+  }
+  .holdings td {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    border-bottom: none;
+    padding: 0;
+    white-space: normal;
+  }
+  .holdings td::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    font-weight: 500;
+  }
+  .holdings td.num {
+    text-align: left;
+  }
+  .holdings .holding-main {
+    grid-column: 1 / -1;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--soft-border);
+  }
+  .holdings .holding-main::before {
+    display: none;
+  }
+  .holdings td[data-label="投入進度"] {
+    grid-column: 1 / -1;
+  }
+  .holdings .progress-cell {
+    min-width: 0;
+  }
+  .holdings tfoot {
+    display: block;
+    margin-top: 12px;
+  }
+  .holdings tfoot tr {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 12px;
+    border-top: 1px solid var(--baseline);
+    padding-top: 10px;
+  }
+  .holdings tfoot td {
+    display: block;
+    border: none;
+    padding: 0;
+    white-space: normal;
+  }
+  .holdings tfoot td:empty {
+    display: none;
   }
 }
 
