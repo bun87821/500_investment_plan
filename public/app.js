@@ -691,41 +691,34 @@ function setPercentInput(input, value) {
   input.value = (Math.round(value * 100) / 100).toFixed(2).replace(/\.?0+$/, '');
 }
 
-function rebalanceEditorPercent(changedInput) {
-  const rows = [...document.querySelectorAll('#editor-body tr')];
-  if (rows.length <= 1) return;
-
-  const changed = Math.max(0, Math.min(100, parseFloat(changedInput.value) || 0));
-  setPercentInput(changedInput, changed);
-
-  const otherInputs = rows
-    .map((tr) => tr.querySelector('.e-percent'))
-    .filter((input) => input && input !== changedInput);
-  const otherTotal = otherInputs.reduce((sum, input) => sum + (parseFloat(input.value) || 0), 0);
-  if (otherTotal <= 0) return;
-
-  const targetOtherTotal = 100 - changed;
-  let assigned = 0;
-  otherInputs.forEach((input, index) => {
-    const next =
-      index === otherInputs.length - 1
-        ? Math.max(0, targetOtherTotal - assigned)
-        : ((parseFloat(input.value) || 0) / otherTotal) * targetOtherTotal;
-    setPercentInput(input, next);
-    assigned += parseFloat(input.value) || 0;
-  });
-}
-
-function normalizeEditorPercents() {
+function rebalanceEditorPercents() {
   const inputs = [...document.querySelectorAll('#editor-body .e-percent')];
-  const total = inputs.reduce((sum, input) => sum + (parseFloat(input.value) || 0), 0);
-  if (!inputs.length || total <= 0) return;
+  if (!inputs.length) return;
+
+  const manualInputs = inputs.filter((input) => input.dataset.manual === '1');
+  const flexibleInputs = inputs.filter((input) => input.dataset.manual !== '1');
+  const manualTotal = manualInputs.reduce((sum, input) => sum + Math.max(0, parseFloat(input.value) || 0), 0);
+  if (manualTotal > 100) {
+    alert(`手動設定的比例合計已經是 ${fmtNum(manualTotal, 1)}%，超過 100%。請先調低部分比例。`);
+    return;
+  }
+
+  const targets = flexibleInputs.length ? flexibleInputs : inputs;
+  const targetTotal = flexibleInputs.length ? 100 - manualTotal : 100;
+  const currentTotal = targets.reduce((sum, input) => sum + Math.max(0, parseFloat(input.value) || 0), 0);
+  if (currentTotal <= 0) return;
+
   let assigned = 0;
-  inputs.forEach((input, index) => {
-    const next = index === inputs.length - 1 ? Math.max(0, 100 - assigned) : ((parseFloat(input.value) || 0) / total) * 100;
+  targets.forEach((input, index) => {
+    const next =
+      index === targets.length - 1
+        ? Math.max(0, targetTotal - assigned)
+        : (Math.max(0, parseFloat(input.value) || 0) / currentTotal) * targetTotal;
     setPercentInput(input, next);
     assigned += parseFloat(input.value) || 0;
   });
+
+  updateEditorTotal();
 }
 
 function openEditor() {
@@ -801,6 +794,7 @@ function initEditor() {
   $('edit-stocks-btn').addEventListener('click', openEditor);
   $('editor-cancel').addEventListener('click', closeEditor);
   $('editor-save').addEventListener('click', saveEditor);
+  $('editor-rebalance').addEventListener('click', rebalanceEditorPercents);
   $('editor-add').addEventListener('click', () => {
     const row = editorRow();
     $('editor-body').appendChild(row);
@@ -808,11 +802,8 @@ function initEditor() {
     updateEditorTotal();
   });
   $('editor-body').addEventListener('input', (e) => {
-    if (e.target.classList.contains('e-percent')) updateEditorTotal();
-  });
-  $('editor-body').addEventListener('change', (e) => {
     if (e.target.classList.contains('e-percent')) {
-      rebalanceEditorPercent(e.target);
+      e.target.dataset.manual = '1';
       updateEditorTotal();
     }
   });
@@ -836,7 +827,6 @@ function initEditor() {
       return;
     }
     tr.remove();
-    normalizeEditorPercents();
     updateEditorTotal();
   });
 }
