@@ -12,11 +12,12 @@
     <header class="header">
       <div>
         <h1>500萬投資計畫追蹤</h1>
-        <p class="subtitle">總預算 NT$5,000,000 ・ 12 檔標的目標配置</p>
+        <p class="subtitle" id="subtitle">總預算 NT$5,000,000 ・ 12 檔標的目標配置</p>
       </div>
       <div class="header-actions">
         <span id="fx-info" class="fx-info"></span>
         <button id="refresh-btn" class="btn">↻ 更新報價</button>
+        <button id="edit-stocks-btn" class="btn btn-ghost">✎ 編輯標的</button>
         <button id="export-btn" class="btn btn-ghost">匯出備份</button>
         <button id="import-btn" class="btn btn-ghost">匯入備份</button>
         <input type="file" id="import-file" accept="application/json" hidden />
@@ -44,7 +45,7 @@
       <div class="kpi">
         <div class="kpi-label">整體投資進度</div>
         <div class="kpi-value" id="kpi-progress">—</div>
-        <div class="kpi-sub">目標 NT$5,000,000</div>
+        <div class="kpi-sub" id="kpi-progress-sub">目標 NT$5,000,000</div>
       </div>
     </section>
 
@@ -58,6 +59,37 @@
           <div class="bar-fill" id="overall-progress-bar" style="width:0%"></div>
         </div>
       </div>
+    </section>
+
+    <section class="card" id="editor-card" hidden>
+      <h2>編輯投資標的</h2>
+      <label class="budget-field">
+        總預算（台幣）
+        <input type="number" id="edit-budget" min="0" step="any" />
+      </label>
+      <div class="table-wrap">
+        <table class="editor-table">
+          <thead>
+            <tr>
+              <th>名稱</th>
+              <th>Yahoo 代號</th>
+              <th>市場</th>
+              <th>幣別</th>
+              <th class="num">比例 %</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="editor-body"></tbody>
+        </table>
+      </div>
+      <div class="editor-foot">
+        <button type="button" id="editor-add" class="btn btn-ghost">＋ 新增標的</button>
+        <span id="editor-total" class="editor-total"></span>
+        <span class="editor-spacer"></span>
+        <button type="button" id="editor-cancel" class="btn">取消</button>
+        <button type="button" id="editor-save" class="btn btn-primary">儲存</button>
+      </div>
+      <p class="hint">Yahoo 代號格式：台股上市加 .TW（如 2330.TW）、上櫃加 .TWO、美股直接用代號（如 NVDA）、韓股加 .KS。美股/韓股等會以即時匯率換算台幣。已有交易紀錄的標的須先刪除其交易才能移除。</p>
     </section>
 
     <section class="card">

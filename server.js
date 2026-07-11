@@ -72,8 +72,22 @@ app.put('/api/portfolio', async (req, res) => {
   if (!body || !Array.isArray(body.transactions)) {
     return res.status(400).json({ error: 'transactions 必須是陣列' });
   }
+  const doc = { transactions: body.transactions };
+  if (body.stocks !== undefined) {
+    if (!Array.isArray(body.stocks)) {
+      return res.status(400).json({ error: 'stocks 必須是陣列' });
+    }
+    doc.stocks = body.stocks;
+  }
+  if (body.budget !== undefined) {
+    const budget = Number(body.budget);
+    if (!(budget > 0)) {
+      return res.status(400).json({ error: 'budget 必須是正數' });
+    }
+    doc.budget = budget;
+  }
   try {
-    await writeData({ transactions: body.transactions });
+    await writeData(doc);
     res.json({ ok: true });
   } catch (err) {
     console.error('寫入失敗：', err.message);

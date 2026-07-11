@@ -254,6 +254,56 @@ tfoot td {
 
 .hint { color: var(--text-muted); font-size: 0.78rem; margin-top: 10px; }
 
+.budget-field {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+.budget-field input {
+  border: 1px solid var(--baseline);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 0.9rem;
+  width: 200px;
+  background: var(--surface);
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.editor-table input, .editor-table select {
+  border: 1px solid var(--baseline);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 0.85rem;
+  background: var(--surface);
+  color: var(--text-primary);
+  width: 100%;
+  min-width: 90px;
+}
+.editor-table .e-percent { min-width: 70px; text-align: right; font-variant-numeric: tabular-nums; }
+.editor-table .e-market { min-width: 64px; }
+.editor-table td { padding: 6px 6px; }
+
+.editor-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.editor-spacer { flex: 1; }
+.editor-total { font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+.editor-total.ok { color: var(--down); }
+.editor-total.warn { color: var(--up); font-weight: 600; }
+
+.budget-field input:focus, .editor-table input:focus, .editor-table select:focus {
+  outline: 2px solid var(--series-1);
+  outline-offset: 1px;
+}
+
 .footer {
   color: var(--text-muted);
   font-size: 0.78rem;
