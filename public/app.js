@@ -12,7 +12,7 @@ const DEFAULT_STOCKS = [
   { id: '3017', name: '奇鋐', symbol: '3017.TW', market: '台股', currency: 'TWD', percent: 5 },
   { id: 'MU', name: 'Micron', symbol: 'MU', market: '美股', currency: 'USD', percent: 5 },
   { id: 'AVGO', name: 'Broadcom', symbol: 'AVGO', market: '美股', currency: 'USD', percent: 3 },
-  { id: '3324', name: '雙鴻', symbol: '3324.TW', market: '台股', currency: 'TWD', percent: 3 },
+  { id: '3324', name: '雙鴻', symbol: '3324.TWO', market: '上櫃', currency: 'TWD', percent: 3 },
   { id: '2368', name: '金像電', symbol: '2368.TW', market: '台股', currency: 'TWD', percent: 3 },
   { id: '3037', name: '欣興', symbol: '3037.TW', market: '台股', currency: 'TWD', percent: 2 },
 ];
