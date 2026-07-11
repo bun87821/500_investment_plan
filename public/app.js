@@ -454,7 +454,7 @@ function renderDonut(rows) {
     const d = sweep >= 359.999 ? ringPath(cx, cy, rO, rI) : arcPath(cx, cy, rO, rI, a0, a1);
     const rule = sweep >= 359.999 ? ' fill-rule="evenodd"' : '';
     const label = `${s.row.stock.name}（${s.cat}）\n${basis.fmtVal(s.value)}・${fmtPct(pct)}`;
-    paths += `<path class="donut-slice" d="${d}"${rule} fill="${s.color}" stroke="var(--surface)" stroke-width="3" stroke-linejoin="round" data-cat="${esc(s.cat)}" data-label="${esc(label)}">`;
+    paths += `<path class="donut-slice" d="${d}"${rule} fill="${s.color}" data-cat="${esc(s.cat)}" data-label="${esc(label)}">`;
     paths += `<title>${esc(label)}</title></path>`;
     // 佔比較大的切片直接標示股票簡稱，避免小切片文字擁擠
     if (pct >= 0.10 && sweep < 359.999) {

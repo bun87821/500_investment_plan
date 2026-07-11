@@ -184,13 +184,9 @@ h1 { font-size: 1.5rem; font-weight: 700; }
 .donut-svg { width: 100%; height: auto; display: block; }
 .donut-backdrop {
   fill: color-mix(in srgb, var(--grid) 58%, transparent);
-  stroke: var(--soft-border);
-  stroke-width: 1;
 }
 .donut-hole {
   fill: var(--surface);
-  stroke: color-mix(in srgb, var(--baseline) 34%, transparent);
-  stroke-width: 1;
 }
 .donut-slice {
   cursor: default;
