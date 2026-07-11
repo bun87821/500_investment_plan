@@ -432,10 +432,10 @@ function renderDonut(rows) {
     const d = sweep >= 359.999 ? ringPath(cx, cy, rO, rI) : arcPath(cx, cy, rO, rI, a0, a1);
     const rule = sweep >= 359.999 ? ' fill-rule="evenodd"' : '';
     const label = `${s.row.stock.name}（${s.cat}）\n${basis.fmtVal(s.value)}・${fmtPct(pct)}`;
-    paths += `<path d="${d}"${rule} fill="${s.color}" stroke="var(--surface)" stroke-width="2" stroke-linejoin="round" data-label="${esc(label)}">`;
+    paths += `<path class="donut-slice" d="${d}"${rule} fill="${s.color}" stroke="var(--surface)" stroke-width="3" stroke-linejoin="round" data-cat="${esc(s.cat)}" data-label="${esc(label)}">`;
     paths += `<title>${esc(label)}</title></path>`;
-    // 佔比 ≥ 8% 的切片直接標示股票簡稱
-    if (pct >= 0.08 && sweep < 359.999) {
+    // 佔比較大的切片直接標示股票簡稱，避免小切片文字擁擠
+    if (pct >= 0.10 && sweep < 359.999) {
       const mid = (a0 + a1) / 2;
       const [lx, ly] = polar(cx, cy, (rO + rI) / 2, mid);
       paths += `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" class="slice-label" text-anchor="middle" dominant-baseline="central">${esc(
@@ -448,9 +448,19 @@ function renderDonut(rows) {
   const centerNum = chartBasis === 'target' ? fmtTWD(state.budget) : fmtTWD(total);
   donutEl.innerHTML = `
     <svg viewBox="0 0 320 320" class="donut-svg" role="img" aria-label="資產類別配置圓餅圖">
+      <defs>
+        <filter id="donut-shadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="rgba(0,0,0,0.18)" flood-opacity="1"/>
+        </filter>
+      </defs>
+      <circle cx="160" cy="160" r="142" class="donut-backdrop"></circle>
+      <g filter="url(#donut-shadow)">
       ${paths}
+      </g>
+      <circle cx="160" cy="160" r="80" class="donut-hole"></circle>
       <text x="160" y="150" text-anchor="middle" class="donut-center-label">${basis.label}</text>
       <text x="160" y="176" text-anchor="middle" class="donut-center-value">${centerNum}</text>
+      <text x="160" y="197" text-anchor="middle" class="donut-center-sub">合計</text>
     </svg>
     <div class="donut-tooltip" id="donut-tooltip" hidden></div>`;
 
@@ -465,20 +475,23 @@ function renderDonutLegend(ordered, colorMap, catOrder, basis, total) {
     const members = ordered.filter((r) => (r.stock.category || '未分類') === cat);
     const catValue = members.reduce((s, r) => s + basis.valueOf(r), 0);
     const catPct = total > 0 ? catValue / total : 0;
+    const legendValue = chartBasis === 'target' ? fmtTWD((state.budget * catValue) / 100) : basis.fmtVal(catValue);
     const memberHtml = members
       .map((r) => {
         const v = basis.valueOf(r);
         const p = total > 0 ? v / total : 0;
-        return `<span class="legend-member${v <= 0 ? ' zero' : ''}">${esc(r.stock.name)} ${fmtPct(p)}</span>`;
+        return `<span class="legend-member${v <= 0 ? ' zero' : ''}"><span>${esc(r.stock.name)}</span><span>${fmtPct(p)}</span></span>`;
       })
-      .join('<span class="legend-dot">·</span>');
+      .join('');
     html += `
-      <div class="legend-group">
+      <div class="legend-group" data-cat="${esc(cat)}">
         <div class="legend-head">
           <span class="legend-swatch" style="background:${colorMap[cat]}"></span>
           <span class="legend-cat">${esc(cat)}</span>
           <span class="legend-cat-pct">${fmtPct(catPct)}</span>
         </div>
+        <div class="legend-value">${legendValue}</div>
+        <div class="legend-track"><span style="width:${Math.max(2, catPct * 100).toFixed(2)}%; background:${colorMap[cat]}"></span></div>
         <div class="legend-members">${memberHtml}</div>
       </div>`;
   }
@@ -490,17 +503,37 @@ function bindDonutTooltip() {
   const tip = $('donut-tooltip');
   if (!svg || !tip) return;
   const wrap = $('donut');
+  const legend = $('donut-legend');
+
+  const setActiveCat = (cat) => {
+    wrap.querySelectorAll('.donut-slice').forEach((slice) => {
+      slice.classList.toggle('is-muted', !!cat && slice.dataset.cat !== cat);
+      slice.classList.toggle('is-active', !!cat && slice.dataset.cat === cat);
+    });
+    legend.querySelectorAll('.legend-group').forEach((group) => {
+      group.classList.toggle('is-muted', !!cat && group.dataset.cat !== cat);
+      group.classList.toggle('is-active', !!cat && group.dataset.cat === cat);
+    });
+  };
+
   svg.querySelectorAll('path').forEach((p) => {
     p.addEventListener('mousemove', (e) => {
       tip.textContent = p.dataset.label;
       tip.hidden = false;
+      setActiveCat(p.dataset.cat);
       const rect = wrap.getBoundingClientRect();
       tip.style.left = e.clientX - rect.left + 12 + 'px';
       tip.style.top = e.clientY - rect.top + 12 + 'px';
     });
     p.addEventListener('mouseleave', () => {
       tip.hidden = true;
+      setActiveCat(null);
     });
+  });
+
+  legend.querySelectorAll('.legend-group').forEach((group) => {
+    group.addEventListener('mouseenter', () => setActiveCat(group.dataset.cat));
+    group.addEventListener('mouseleave', () => setActiveCat(null));
   });
 }
 
