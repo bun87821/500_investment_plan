@@ -35,6 +35,9 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* 自訂 display 的元素也要尊重 hidden 屬性 */
+[hidden] { display: none !important; }
+
 body {
   font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans TC", sans-serif;
   background: var(--page);
@@ -432,4 +435,45 @@ tfoot td {
   color: var(--text-muted);
   font-size: 0.78rem;
   text-align: center;
+}
+
+/* 主內容容器沿用 .page 的垂直間距 */
+.app-main {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* 訪客模式登入提示條 */
+.login-banner {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+.login-banner-text {
+  flex: 1 1 300px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.login-banner-text strong { color: var(--text-primary); }
+.gsi-button { flex: 0 0 auto; min-height: 40px; }
+
+/* 已登入使用者 */
+.user-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+.user-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
 }

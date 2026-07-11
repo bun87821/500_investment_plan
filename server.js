@@ -1,12 +1,113 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// ---- Google 登入設定 ----
+// 設定 GOOGLE_CLIENT_ID 後啟用多人模式（每個 Google 帳號各自儲存自己的計畫）；
+// 未設定則維持單人模式（所有人共用同一份資料，適合個人使用或本機開發）。
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const AUTH_ENABLED = !!GOOGLE_CLIENT_ID;
+const SESSION_DAYS = 30;
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+
+if (AUTH_ENABLED && !process.env.SESSION_SECRET) {
+  console.warn('警告：未設定 SESSION_SECRET，已隨機產生 — 每次重新部署所有使用者都需重新登入。');
+}
+
+app.set('trust proxy', 1); // Railway 走反向代理，讓 secure cookie 與 req.secure 正確
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ---- Session（HMAC 簽章的無狀態 token，存在 httpOnly cookie）----
+function signSession(user) {
+  const payload = Buffer.from(
+    JSON.stringify({
+      sub: user.sub,
+      email: user.email,
+      name: user.name,
+      picture: user.picture,
+      exp: Date.now() + SESSION_DAYS * 86400_000,
+    })
+  ).toString('base64url');
+  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
+  return payload + '.' + sig;
+}
+
+function verifySession(token) {
+  try {
+    const [payload, sig] = String(token).split('.');
+    if (!payload || !sig) return null;
+    const expect = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
+    if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expect))) return null;
+    const user = JSON.parse(Buffer.from(payload, 'base64url').toString());
+    if (!user.sub || user.exp < Date.now()) return null;
+    return user;
+  } catch {
+    return null;
+  }
+}
+
+function getUser(req) {
+  const m = (req.headers.cookie || '').match(/(?:^|;\s*)session=([^;]+)/);
+  return m ? verifySession(decodeURIComponent(m[1])) : null;
+}
+
+// 單人模式一律以 'legacy' 為 key；多人模式以 Google 帳號的 sub 為 key
+function requireUser(req, res) {
+  if (!AUTH_ENABLED) return { sub: 'legacy' };
+  const user = getUser(req);
+  if (!user) {
+    res.status(401).json({ error: '請先登入' });
+    return null;
+  }
+  return user;
+}
+
+// ---- Google ID token 驗證 ----
+let verifyGoogleCredential = null;
+if (AUTH_ENABLED) {
+  const { OAuth2Client } = require('google-auth-library');
+  const oauthClient = new OAuth2Client(GOOGLE_CLIENT_ID);
+  verifyGoogleCredential = async (credential) => {
+    const ticket = await oauthClient.verifyIdToken({ idToken: credential, audience: GOOGLE_CLIENT_ID });
+    return ticket.getPayload();
+  };
+}
+
+app.get('/api/config', (req, res) => {
+  res.json({ authEnabled: AUTH_ENABLED, googleClientId: GOOGLE_CLIENT_ID });
+});
+
+app.get('/api/me', (req, res) => {
+  res.json({ user: AUTH_ENABLED ? getUser(req) : null });
+});
+
+app.post('/api/auth/google', async (req, res) => {
+  if (!AUTH_ENABLED) return res.status(400).json({ error: '此站未啟用 Google 登入' });
+  try {
+    const p = await verifyGoogleCredential(req.body?.credential);
+    const user = { sub: p.sub, email: p.email || '', name: p.name || p.email || '使用者', picture: p.picture || '' };
+    res.cookie('session', signSession(user), {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: 'auto',
+      maxAge: SESSION_DAYS * 86400_000,
+    });
+    res.json({ user });
+  } catch (err) {
+    console.error('Google 登入驗證失敗：', err.message);
+    res.status(401).json({ error: 'Google 登入驗證失敗' });
+  }
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  res.clearCookie('session');
+  res.json({ ok: true });
+});
 
 // ---- 資料儲存：有 DATABASE_URL（Railway Postgres 自動注入）就用 Postgres，
 //      否則存本機 JSON 檔（Railway 檔案系統重新部署會清空，僅適合本機開發）----
@@ -22,45 +123,63 @@ if (process.env.DATABASE_URL) {
     connectionString: url,
     ssl: needSSL ? { rejectUnauthorized: false } : false,
   });
-  const ready = pool
-    .query('CREATE TABLE IF NOT EXISTS portfolio (id INTEGER PRIMARY KEY, data JSONB NOT NULL)')
-    .then(() => console.log('儲存後端：Postgres'));
+  const ready = (async () => {
+    await pool.query(
+      'CREATE TABLE IF NOT EXISTS portfolios (user_id TEXT PRIMARY KEY, data JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())'
+    );
+    // 從舊版單列 portfolio 資料表搬移既有資料到 'legacy'（只在第一次執行時發生）
+    try {
+      await pool.query(
+        "INSERT INTO portfolios (user_id, data) SELECT 'legacy', data FROM portfolio WHERE id = 1 ON CONFLICT (user_id) DO NOTHING"
+      );
+    } catch {
+      /* 舊資料表不存在就略過 */
+    }
+    console.log(`儲存後端：Postgres（${AUTH_ENABLED ? '多人模式' : '單人模式'}）`);
+  })();
 
-  readData = async () => {
+  readData = async (userId) => {
     await ready;
-    const r = await pool.query('SELECT data FROM portfolio WHERE id = 1');
+    const r = await pool.query('SELECT data FROM portfolios WHERE user_id = $1', [userId]);
     return r.rows[0]?.data ?? { transactions: [] };
   };
-  writeData = async (data) => {
+  writeData = async (userId, data) => {
     await ready;
     await pool.query(
-      'INSERT INTO portfolio (id, data) VALUES (1, $1) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data',
-      [JSON.stringify(data)]
+      'INSERT INTO portfolios (user_id, data) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()',
+      [userId, JSON.stringify(data)]
     );
   };
 } else {
   const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
-  const DATA_FILE = path.join(DATA_DIR, 'portfolio.json');
-  console.log('儲存後端：JSON 檔案（未設定 DATABASE_URL）');
+  console.log(`儲存後端：JSON 檔案（未設定 DATABASE_URL，${AUTH_ENABLED ? '多人模式' : '單人模式'}）`);
 
-  readData = async () => {
+  const fileOf = (userId) =>
+    userId === 'legacy'
+      ? path.join(DATA_DIR, 'portfolio.json')
+      : path.join(DATA_DIR, 'users', encodeURIComponent(userId) + '.json');
+
+  readData = async (userId) => {
     try {
-      return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+      return JSON.parse(fs.readFileSync(fileOf(userId), 'utf8'));
     } catch {
       return { transactions: [] };
     }
   };
-  writeData = async (data) => {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    const tmp = DATA_FILE + '.tmp';
+  writeData = async (userId, data) => {
+    const file = fileOf(userId);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = file + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
-    fs.renameSync(tmp, DATA_FILE);
+    fs.renameSync(tmp, file);
   };
 }
 
 app.get('/api/portfolio', async (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
   try {
-    res.json(await readData());
+    res.json(await readData(user.sub));
   } catch (err) {
     console.error('讀取失敗：', err.message);
     res.status(500).json({ error: '讀取資料失敗' });
@@ -68,6 +187,8 @@ app.get('/api/portfolio', async (req, res) => {
 });
 
 app.put('/api/portfolio', async (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
   const body = req.body;
   if (!body || !Array.isArray(body.transactions)) {
     return res.status(400).json({ error: 'transactions 必須是陣列' });
@@ -87,7 +208,7 @@ app.put('/api/portfolio', async (req, res) => {
     doc.budget = budget;
   }
   try {
-    await writeData(doc);
+    await writeData(user.sub, doc);
     res.json({ ok: true });
   } catch (err) {
     console.error('寫入失敗：', err.message);
@@ -126,7 +247,8 @@ app.get('/api/quotes', async (req, res) => {
   const symbols = String(req.query.symbols || '')
     .split(',')
     .map((s) => s.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .slice(0, 60);
   if (!symbols.length) return res.status(400).json({ error: '缺少 symbols 參數' });
 
   const results = await Promise.allSettled(symbols.map(fetchQuote));

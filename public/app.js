@@ -66,7 +66,15 @@ const state = {
   quoteErrors: {},
   fetchedAt: null,
   usingCachedQuotes: false,
+  authEnabled: false,
+  user: null, // { sub, email, name, picture }
 };
+
+// 各使用者在瀏覽器端的備份各自存一份；訪客（未登入）模式的正式儲存位置就是這裡
+const backupKey = () => 'portfolio-backup:' + (state.user?.sub || 'local');
+
+// 啟用登入但尚未登入 → 訪客模式：資料只存瀏覽器 localStorage，不打伺服器
+const isGuest = () => state.authEnabled && !state.user;
 
 const $ = (id) => document.getElementById(id);
 
@@ -105,36 +113,57 @@ function applyDoc(data) {
   if (Number(data.budget) > 0) state.budget = Number(data.budget);
 }
 
+function tryApplyBackup(key) {
+  const backup = localStorage.getItem(key);
+  if (!backup) return false;
+  try {
+    const parsed = JSON.parse(backup);
+    if (Array.isArray(parsed.transactions) && parsed.transactions.length) {
+      applyDoc(parsed);
+      return true;
+    }
+  } catch { /* 備份損毀就略過 */ }
+  return false;
+}
+
 async function loadPortfolio() {
+  if (isGuest()) {
+    // 訪客模式：直接從瀏覽器讀（也相容啟用登入前的舊 key）
+    tryApplyBackup(backupKey()) || tryApplyBackup('portfolio-backup');
+    return;
+  }
   try {
     const res = await fetch('/api/portfolio');
-    applyDoc(await res.json());
+    if (res.ok) applyDoc(await res.json());
   } catch {
     /* 保持預設值 */
   }
-  // 伺服器是空的但本機瀏覽器有備份（例如資料庫被清空）→ 還原
-  const backup = localStorage.getItem('portfolio-backup');
-  if (!state.transactions.length && backup) {
-    try {
-      const parsed = JSON.parse(backup);
-      if (Array.isArray(parsed.transactions) && parsed.transactions.length) {
-        applyDoc(parsed);
-        savePortfolio();
-        showNotice('伺服器上沒有資料，已從瀏覽器備份還原紀錄。');
-      }
-    } catch { /* 備份損毀就略過 */ }
+  // 伺服器是空的但瀏覽器有備份 → 還原。依序找：這個帳號的備份、訪客模式的資料
+  //（剛登入的新帳號會把訪客時期建立的計畫帶上雲端）、舊版未分帳號的備份
+  if (!state.transactions.length) {
+    const restored =
+      tryApplyBackup(backupKey()) || tryApplyBackup('portfolio-backup:local') || tryApplyBackup('portfolio-backup');
+    if (restored) {
+      savePortfolio();
+      showNotice('已將瀏覽器中的紀錄同步到你的帳號。');
+    }
   }
 }
 
 async function savePortfolio() {
   const payload = { budget: state.budget, stocks: state.stocks, transactions: state.transactions };
-  localStorage.setItem('portfolio-backup', JSON.stringify(payload));
+  localStorage.setItem(backupKey(), JSON.stringify(payload));
+  if (isGuest()) return; // 訪客模式只存瀏覽器
   try {
     const res = await fetch('/api/portfolio', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+    if (res.status === 401) {
+      showNotice('登入已過期，資料暫存在瀏覽器中 — 請重新整理頁面登入後再操作一次。');
+      return;
+    }
     if (!res.ok) throw new Error();
   } catch {
     showNotice('儲存到伺服器失敗，資料暫存在瀏覽器中，請稍後重試或匯出備份。');
@@ -725,14 +754,103 @@ function initForm() {
   });
 }
 
-// ---------- 啟動 ----------
-(async function main() {
-  initForm();
-  initEditor();
+// ---------- 登入 ----------
+function showLoginBanner(clientId) {
+  $('login-view').hidden = false;
+
+  const script = document.createElement('script');
+  script.src = 'https://accounts.google.com/gsi/client';
+  script.async = true;
+  script.onload = () => {
+    google.accounts.id.initialize({ client_id: clientId, callback: onGoogleCredential });
+    google.accounts.id.renderButton($('gsi-button'), {
+      theme: 'outline',
+      size: 'large',
+      text: 'signin_with',
+      locale: 'zh_TW',
+      width: 240,
+    });
+  };
+  script.onerror = () => {
+    const err = $('login-error');
+    err.textContent = '（Google 登入元件載入失敗，訪客模式不受影響）';
+    err.hidden = false;
+  };
+  document.head.appendChild(script);
+}
+
+async function onGoogleCredential(response) {
+  try {
+    const res = await fetch('/api/auth/google', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential: response.credential }),
+    });
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    state.user = data.user;
+    $('login-view').hidden = true;
+    // 換人了：先回到預設狀態再載入帳號資料，避免訪客資料和帳號資料混在一起
+    state.budget = DEFAULT_BUDGET;
+    state.stocks = DEFAULT_STOCKS;
+    state.transactions = [];
+    await enterApp();
+  } catch {
+    const err = $('login-error');
+    err.textContent = '（登入驗證失敗，請再試一次）';
+    err.hidden = false;
+  }
+}
+
+function updateUserChip() {
+  if (!state.user) return;
+  $('user-chip').hidden = false;
+  $('user-name').textContent = state.user.name;
+  const avatar = $('user-avatar');
+  if (state.user.picture) {
+    avatar.src = state.user.picture;
+  } else {
+    avatar.hidden = true;
+  }
+}
+
+async function enterApp() {
+  updateUserChip();
+  $('header-actions').hidden = false;
+  $('app-main').hidden = false;
   await loadPortfolio();
   rebuildStockSelect();
   render();
   // 開頁時載入一次現價，之後由「↻ 更新報價」按鈕手動更新
   await loadQuotes();
   render();
+}
+
+// ---------- 啟動 ----------
+(async function main() {
+  initForm();
+  initEditor();
+  $('logout-btn').addEventListener('click', async () => {
+    await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+    location.reload();
+  });
+
+  let cfg = { authEnabled: false };
+  try {
+    cfg = await (await fetch('/api/config')).json();
+  } catch { /* 當作未啟用登入 */ }
+  state.authEnabled = cfg.authEnabled;
+
+  if (cfg.authEnabled) {
+    let me = { user: null };
+    try {
+      me = await (await fetch('/api/me')).json();
+    } catch { /* 視為未登入 */ }
+    if (me.user) {
+      state.user = me.user;
+    } else {
+      showLoginBanner(cfg.googleClientId); // 訪客照常使用，資料存瀏覽器
+    }
+  }
+  await enterApp();
 })();

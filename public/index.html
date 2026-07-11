@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>500萬投資計畫追蹤</title>
+  <title>投資計畫追蹤</title>
   <link rel="stylesheet" href="style.css" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📈</text></svg>" />
 </head>
@@ -11,20 +11,36 @@
   <div class="page">
     <header class="header">
       <div>
-        <h1>500萬投資計畫追蹤</h1>
-        <p class="subtitle" id="subtitle">總預算 NT$5,000,000 ・ 12 檔標的目標配置</p>
+        <h1>投資計畫追蹤</h1>
+        <p class="subtitle" id="subtitle">載入中…</p>
       </div>
-      <div class="header-actions">
+      <div class="header-actions" id="header-actions" hidden>
         <span id="fx-info" class="fx-info"></span>
         <button id="refresh-btn" class="btn">↻ 更新報價</button>
         <button id="edit-stocks-btn" class="btn btn-ghost">✎ 編輯標的</button>
         <button id="export-btn" class="btn btn-ghost">匯出備份</button>
         <button id="import-btn" class="btn btn-ghost">匯入備份</button>
         <input type="file" id="import-file" accept="application/json" hidden />
+        <span id="user-chip" class="user-chip" hidden>
+          <img id="user-avatar" class="user-avatar" alt="" referrerpolicy="no-referrer" />
+          <span id="user-name"></span>
+          <button id="logout-btn" class="btn btn-ghost">登出</button>
+        </span>
       </div>
     </header>
 
     <div id="notice" class="notice" hidden></div>
+
+    <section class="card login-banner" id="login-view" hidden>
+      <div class="login-banner-text">
+        <strong>訪客模式</strong>
+        <span>資料只儲存在這個瀏覽器。使用 Google 登入即可把你的計畫存到雲端，換裝置或清瀏覽器資料都不會遺失，每個帳號的計畫各自獨立。</span>
+        <span class="hint" id="login-error" hidden></span>
+      </div>
+      <div id="gsi-button" class="gsi-button"></div>
+    </section>
+
+    <div id="app-main" class="app-main" hidden>
 
     <section class="kpi-row" id="kpi-row">
       <div class="kpi">
@@ -181,9 +197,10 @@
       </div>
     </section>
 
-    <footer class="footer">
-      報價來源：Yahoo Finance（延遲報價，僅供參考）・<span id="updated-at"></span>
-    </footer>
+      <footer class="footer">
+        報價來源：Yahoo Finance（延遲報價，僅供參考）・<span id="updated-at"></span>
+      </footer>
+    </div><!-- /app-main -->
   </div>
   <datalist id="category-list"></datalist>
   <script src="app.js"></script>
