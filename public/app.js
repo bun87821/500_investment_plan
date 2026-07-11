@@ -323,10 +323,13 @@ function initForm() {
   });
 
   $('refresh-btn').addEventListener('click', async () => {
-    $('refresh-btn').disabled = true;
+    const btn = $('refresh-btn');
+    btn.disabled = true;
+    btn.textContent = '更新中…';
     await loadQuotes();
     render();
-    $('refresh-btn').disabled = false;
+    btn.disabled = false;
+    btn.textContent = '↻ 更新報價';
   });
 
   $('export-btn').addEventListener('click', () => {
@@ -364,11 +367,7 @@ function initForm() {
   initForm();
   await loadPortfolio();
   render();
+  // 開頁時載入一次現價，之後由「↻ 更新報價」按鈕手動更新
   await loadQuotes();
   render();
-  // 每 5 分鐘自動更新報價
-  setInterval(async () => {
-    await loadQuotes();
-    render();
-  }, 5 * 60 * 1000);
 })();
