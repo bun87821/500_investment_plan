@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>500萬投資計畫追蹤</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📈</text></svg>" />
+</head>
+<body>
+  <div class="page">
+    <header class="header">
+      <div>
+        <h1>500萬投資計畫追蹤</h1>
+        <p class="subtitle">總預算 NT$5,000,000 ・ 12 檔標的目標配置</p>
+      </div>
+      <div class="header-actions">
+        <span id="fx-info" class="fx-info"></span>
+        <button id="refresh-btn" class="btn">↻ 更新報價</button>
+        <button id="export-btn" class="btn btn-ghost">匯出備份</button>
+        <button id="import-btn" class="btn btn-ghost">匯入備份</button>
+        <input type="file" id="import-file" accept="application/json" hidden />
+      </div>
+    </header>
+
+    <div id="notice" class="notice" hidden></div>
+
+    <section class="kpi-row" id="kpi-row">
+      <div class="kpi">
+        <div class="kpi-label">已投入成本</div>
+        <div class="kpi-value" id="kpi-invested">—</div>
+        <div class="kpi-sub" id="kpi-invested-sub"></div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">目前市值</div>
+        <div class="kpi-value" id="kpi-value">—</div>
+        <div class="kpi-sub" id="kpi-value-sub"></div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">未實現損益</div>
+        <div class="kpi-value" id="kpi-pnl">—</div>
+        <div class="kpi-sub" id="kpi-pnl-sub"></div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">整體投資進度</div>
+        <div class="kpi-value" id="kpi-progress">—</div>
+        <div class="kpi-sub">目標 NT$5,000,000</div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="overall-progress">
+        <div class="overall-progress-head">
+          <span>資金投入進度</span>
+          <span id="overall-progress-label">—</span>
+        </div>
+        <div class="bar-track bar-track-lg">
+          <div class="bar-fill" id="overall-progress-bar" style="width:0%"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>持股配置與進度</h2>
+      <div class="table-wrap">
+        <table class="holdings" id="holdings-table">
+          <thead>
+            <tr>
+              <th>標的</th>
+              <th class="num">目標配置</th>
+              <th class="num">持有股數</th>
+              <th class="num">平均成本<span class="th-sub">原幣</span></th>
+              <th class="num">投入成本<span class="th-sub">台幣</span></th>
+              <th class="progress-col">投入進度</th>
+              <th class="num">現價<span class="th-sub">原幣</span></th>
+              <th class="num">市值<span class="th-sub">台幣</span></th>
+              <th class="num">未實現損益</th>
+            </tr>
+          </thead>
+          <tbody id="holdings-body"></tbody>
+          <tfoot id="holdings-foot"></tfoot>
+        </table>
+      </div>
+      <p class="hint">※ SK hynix 未在台/美上市，以韓國原股 000660.KS 報價（可透過複委託買入）。美股、韓股金額以即時匯率換算為台幣。</p>
+    </section>
+
+    <section class="grid-2">
+      <div class="card">
+        <h2>新增交易</h2>
+        <form id="tx-form" class="tx-form">
+          <label>
+            標的
+            <select id="tx-stock" required></select>
+          </label>
+          <label>
+            日期
+            <input type="date" id="tx-date" required />
+          </label>
+          <label>
+            股數
+            <input type="number" id="tx-shares" step="any" required placeholder="賣出請輸入負數" />
+          </label>
+          <label>
+            每股價格（原幣）
+            <input type="number" id="tx-price" step="any" min="0" required placeholder="以該股票交易幣別計" />
+          </label>
+          <label>
+            台幣總成本（選填）
+            <input type="number" id="tx-twd" step="any" placeholder="留空則以即時匯率換算" />
+          </label>
+          <button type="submit" class="btn btn-primary">新增交易</button>
+        </form>
+      </div>
+      <div class="card">
+        <h2>交易紀錄</h2>
+        <div class="table-wrap">
+          <table class="tx-table">
+            <thead>
+              <tr>
+                <th>日期</th>
+                <th>標的</th>
+                <th class="num">股數</th>
+                <th class="num">價格（原幣）</th>
+                <th class="num">台幣成本</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="tx-body"></tbody>
+          </table>
+        </div>
+        <p class="hint" id="tx-empty">尚無交易紀錄，從左側表單新增第一筆買入。</p>
+      </div>
+    </section>
+
+    <footer class="footer">
+      報價來源：Yahoo Finance（延遲報價，僅供參考）・<span id="updated-at"></span>
+    </footer>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
