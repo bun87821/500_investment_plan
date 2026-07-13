@@ -102,7 +102,7 @@
       <h2>編輯投資標的</h2>
       <label class="budget-field">
         總預算（台幣）
-        <input type="number" id="edit-budget" min="0" step="any" />
+        <input type="text" id="edit-budget" inputmode="decimal" />
       </label>
       <div class="table-wrap">
         <table class="editor-table">
@@ -169,15 +169,15 @@
           </label>
           <label>
             股數
-            <input type="number" id="tx-shares" step="any" required placeholder="賣出請輸入負數" />
+            <input type="text" id="tx-shares" inputmode="decimal" required placeholder="賣出請輸入負數" />
           </label>
           <label>
             每股價格（原幣）
-            <input type="number" id="tx-price" step="any" min="0" required placeholder="以該股票交易幣別計" />
+            <input type="text" id="tx-price" inputmode="decimal" required placeholder="以該股票交易幣別計" />
           </label>
           <label>
             台幣總成本（選填）
-            <input type="number" id="tx-twd" step="any" placeholder="留空則以即時匯率換算" />
+            <input type="text" id="tx-twd" inputmode="decimal" placeholder="留空則以即時匯率換算" />
           </label>
           <button type="submit" class="btn btn-primary">新增交易</button>
         </form>

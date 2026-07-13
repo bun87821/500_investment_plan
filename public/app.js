@@ -95,6 +95,10 @@ const fmtPct = (n, digits = 1) =>
 
 const signed = (n, fmt) => (n > 0 ? '+' : '') + fmt(n);
 const pnlClass = (n) => (n > 0 ? 'up' : n < 0 ? 'down' : '');
+const parseDecimalInput = (value) => {
+  const normalized = String(value ?? '').trim().replace(',', '.');
+  return normalized === '' ? NaN : parseFloat(normalized);
+};
 
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -614,7 +618,7 @@ function editorRow(s = { id: '', name: '', symbol: '', market: '台股', currenc
     <td><input class="e-market" value="${esc(s.market)}" placeholder="台股"></td>
     <td><input class="e-category" list="category-list" value="${esc(s.category || '')}" placeholder="如 記憶體"></td>
     <td><select class="e-currency">${currencyOptions}</select></td>
-    <td class="num"><input class="e-percent" type="number" step="any" min="0" value="${Number(s.percent) || 0}"></td>
+    <td class="num"><input class="e-percent" type="text" inputmode="decimal" value="${Number(s.percent) || 0}"></td>
     <td><button type="button" class="tx-del e-del" title="刪除標的">✕</button></td>`;
   return tr;
 }
@@ -683,7 +687,7 @@ function refreshCategoryDatalist() {
 
 function updateEditorTotal() {
   const total = [...document.querySelectorAll('#editor-body .e-percent')].reduce(
-    (s, el) => s + (parseFloat(el.value) || 0),
+    (s, el) => s + (parseDecimalInput(el.value) || 0),
     0
   );
   const el = $('editor-total');
@@ -701,7 +705,7 @@ function rebalanceEditorPercents() {
 
   const manualInputs = inputs.filter((input) => input.dataset.manual === '1');
   const flexibleInputs = inputs.filter((input) => input.dataset.manual !== '1');
-  const manualTotal = manualInputs.reduce((sum, input) => sum + Math.max(0, parseFloat(input.value) || 0), 0);
+  const manualTotal = manualInputs.reduce((sum, input) => sum + Math.max(0, parseDecimalInput(input.value) || 0), 0);
   if (manualTotal > 100) {
     alert(`手動設定的比例合計已經是 ${fmtNum(manualTotal, 1)}%，超過 100%。請先調低部分比例。`);
     return;
@@ -709,7 +713,7 @@ function rebalanceEditorPercents() {
 
   const targets = flexibleInputs.length ? flexibleInputs : inputs;
   const targetTotal = flexibleInputs.length ? 100 - manualTotal : 100;
-  const currentTotal = targets.reduce((sum, input) => sum + Math.max(0, parseFloat(input.value) || 0), 0);
+  const currentTotal = targets.reduce((sum, input) => sum + Math.max(0, parseDecimalInput(input.value) || 0), 0);
   if (currentTotal <= 0) return;
 
   let assigned = 0;
@@ -717,9 +721,9 @@ function rebalanceEditorPercents() {
     const next =
       index === targets.length - 1
         ? Math.max(0, targetTotal - assigned)
-        : (Math.max(0, parseFloat(input.value) || 0) / currentTotal) * targetTotal;
+        : (Math.max(0, parseDecimalInput(input.value) || 0) / currentTotal) * targetTotal;
     setPercentInput(input, next);
-    assigned += parseFloat(input.value) || 0;
+    assigned += parseDecimalInput(input.value) || 0;
   });
 
   updateEditorTotal();
@@ -742,7 +746,7 @@ function closeEditor() {
 }
 
 function saveEditor() {
-  const budget = parseFloat($('edit-budget').value);
+  const budget = parseDecimalInput($('edit-budget').value);
   if (!(budget > 0)) {
     alert('總預算必須是正數');
     return;
@@ -770,7 +774,7 @@ function saveEditor() {
       market: q('.e-market').value.trim() || '—',
       category: q('.e-category').value.trim() || '未分類',
       currency: q('.e-currency').value,
-      percent: parseFloat(q('.e-percent').value) || 0,
+      percent: parseDecimalInput(q('.e-percent').value) || 0,
     });
   }
 
@@ -842,8 +846,8 @@ function initForm() {
 
   $('tx-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const shares = parseFloat($('tx-shares').value);
-    const price = parseFloat($('tx-price').value);
+    const shares = parseDecimalInput($('tx-shares').value);
+    const price = parseDecimalInput($('tx-price').value);
     if (!shares || Number.isNaN(price)) return;
     const twdRaw = $('tx-twd').value.trim();
     state.transactions.push({
@@ -852,7 +856,7 @@ function initForm() {
       date: $('tx-date').value,
       shares,
       price,
-      twdCost: twdRaw === '' ? null : Math.abs(parseFloat(twdRaw)),
+      twdCost: twdRaw === '' ? null : Math.abs(parseDecimalInput(twdRaw)),
     });
     await savePortfolio();
     $('tx-shares').value = '';
