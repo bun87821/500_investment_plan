@@ -497,11 +497,14 @@ h1 { font-size: 1.5rem; font-weight: 700; }
 }
 .value-line { stroke: var(--series-1); }
 .pct-line { stroke: var(--up); stroke-dasharray: 7 6; }
-.snapshot-point {
+.snapshot-point,
+.pct-point {
   fill: var(--series-1);
   stroke: var(--surface);
   stroke-width: 2;
 }
+.pct-point { fill: var(--up); }
+.pct-point.down { fill: var(--down); }
 .snapshot-legend {
   display: flex;
   gap: 16px;

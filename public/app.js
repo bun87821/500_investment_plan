@@ -401,16 +401,20 @@ function renderSnapshotChart() {
   const plotW = width - pad.l - pad.r;
   const plotH = height - pad.t - pad.b;
   const values = snapshots.map((s) => s.totalValue);
-  const pcts = snapshots.map((s) => s.pnlPct);
+  const dailyPcts = snapshots
+    .map((s, i) =>
+      i > 0 && snapshots[i - 1].totalValue > 0 ? { snapshot: s, index: i, pct: s.totalValue / snapshots[i - 1].totalValue - 1 } : null
+    )
+    .filter(Boolean);
   const vMin = 0;
   const vMax = Math.max(1, ...values);
-  const pMaxAbs = Math.max(0.01, ...pcts.map((p) => Math.abs(p)));
+  const pMaxAbs = Math.max(0.01, ...dailyPcts.map((p) => Math.abs(p.pct)));
   const xOf = (i) => pad.l + (snapshots.length === 1 ? plotW / 2 : (i / (snapshots.length - 1)) * plotW);
   const yVal = (v) => scaleValue(v, vMin, vMax, pad.t, pad.t + plotH);
   const yPct = (p) => scaleValue(p, -pMaxAbs, pMaxAbs, pad.t, pad.t + plotH);
   const linePath = (points) => points.map((p, i) => `${i ? 'L' : 'M'} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ');
   const valuePath = linePath(snapshots.map((s, i) => [xOf(i), yVal(s.totalValue)]));
-  const pctPath = linePath(snapshots.map((s, i) => [xOf(i), yPct(s.pnlPct)]));
+  const pctPath = dailyPcts.length >= 2 ? linePath(dailyPcts.map((p) => [xOf(p.index), yPct(p.pct)])) : '';
   const zeroY = yPct(0);
   const firstDate = snapshots[0].date.slice(5);
   const lastDate = snapshots[snapshots.length - 1].date.slice(5);
@@ -423,12 +427,21 @@ function renderSnapshotChart() {
         </circle>`
     )
     .join('');
+  const pctPoints = dailyPcts
+    .map(
+      (p) =>
+        `<circle class="pct-point ${pnlClass(p.pct)}" cx="${xOf(p.index).toFixed(1)}" cy="${yPct(p.pct).toFixed(1)}" r="3">
+          <title>${esc(p.snapshot.date)}\n當日漲跌 ${signed(p.pct, fmtPct)}\n市值 ${fmtTWD(p.snapshot.totalValue)}</title>
+        </circle>`
+    )
+    .join('');
+  const latestDailyPct = dailyPcts.length ? dailyPcts[dailyPcts.length - 1].pct : null;
 
   el.innerHTML = `
     <div class="snapshot-summary">
       <span>最新市值 <strong>${fmtTWD(latest.totalValue)}</strong></span>
       <span class="${pnlClass(latest.pnl ?? 0)}">未實現損益 <strong>${latest.pnl != null ? signed(latest.pnl, (n) => fmtTWD(n)) : '—'}</strong></span>
-      <span class="${pnlClass(latest.pnlPct ?? 0)}">損益率 <strong>${latest.pnlPct != null ? signed(latest.pnlPct, fmtPct) : '—'}</strong></span>
+      <span class="${pnlClass(latestDailyPct ?? 0)}">當日漲跌 <strong>${latestDailyPct != null ? signed(latestDailyPct, fmtPct) : '至少需 2 筆'}</strong></span>
     </div>
     <svg viewBox="0 0 ${width} ${height}" class="snapshot-svg" role="img" aria-label="每日市值與損益率曲線圖">
       <line x1="${pad.l}" y1="${pad.t}" x2="${pad.l}" y2="${pad.t + plotH}" class="axis-line"></line>
@@ -442,12 +455,13 @@ function renderSnapshotChart() {
       <text x="${pad.l}" y="${height - 12}" text-anchor="middle" class="axis-text">${esc(firstDate)}</text>
       <text x="${pad.l + plotW}" y="${height - 12}" text-anchor="middle" class="axis-text">${esc(lastDate)}</text>
       <path d="${valuePath}" class="value-line"></path>
-      <path d="${pctPath}" class="pct-line"></path>
+      ${pctPath ? `<path d="${pctPath}" class="pct-line"></path>` : ''}
       ${points}
+      ${pctPoints}
     </svg>
     <div class="snapshot-legend">
       <span><i class="legend-line value"></i>總市值</span>
-      <span><i class="legend-line pct"></i>損益率（右軸）</span>
+      <span><i class="legend-line pct"></i>每日漲跌幅（右軸）</span>
     </div>`;
 }
 
