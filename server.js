@@ -113,6 +113,7 @@ app.post('/api/auth/logout', (req, res) => {
 //      否則存本機 JSON 檔（Railway 檔案系統重新部署會清空，僅適合本機開發）----
 let readData;
 let writeData;
+let listUserIds;
 
 if (process.env.DATABASE_URL) {
   const { Pool } = require('pg');
@@ -150,6 +151,11 @@ if (process.env.DATABASE_URL) {
       [userId, JSON.stringify(data)]
     );
   };
+  listUserIds = async () => {
+    await ready;
+    const r = await pool.query('SELECT user_id FROM portfolios');
+    return r.rows.map((row) => row.user_id);
+  };
 } else {
   const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
   console.log(`儲存後端：JSON 檔案（未設定 DATABASE_URL，${AUTH_ENABLED ? '多人模式' : '單人模式'}）`);
@@ -172,6 +178,19 @@ if (process.env.DATABASE_URL) {
     const tmp = file + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
     fs.renameSync(tmp, file);
+  };
+  listUserIds = async () => {
+    const ids = [];
+    if (fs.existsSync(fileOf('legacy'))) ids.push('legacy');
+    const usersDir = path.join(DATA_DIR, 'users');
+    try {
+      for (const name of fs.readdirSync(usersDir)) {
+        if (name.endsWith('.json')) ids.push(decodeURIComponent(name.slice(0, -5)));
+      }
+    } catch {
+      /* 沒有使用者資料夾就略過 */
+    }
+    return ids;
   };
 }
 
@@ -207,6 +226,12 @@ app.put('/api/portfolio', async (req, res) => {
     }
     doc.budget = budget;
   }
+  if (body.snapshots !== undefined) {
+    if (!Array.isArray(body.snapshots)) {
+      return res.status(400).json({ error: 'snapshots 必須是陣列' });
+    }
+    doc.snapshots = body.snapshots;
+  }
   try {
     await writeData(user.sub, doc);
     res.json({ ok: true });
@@ -241,6 +266,132 @@ async function fetchQuote(symbol) {
   };
   quoteCache.set(symbol, { at: Date.now(), data });
   return data;
+}
+
+function fxSymbolOf(currency) {
+  if (currency === 'TWD') return null;
+  return currency === 'USD' ? 'TWD=X' : currency + 'TWD=X';
+}
+
+function taipeiDateString(at = new Date()) {
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Asia/Taipei',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(at);
+}
+
+function nextTaipeiTwoPmDelayMs(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Taipei',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    second: 'numeric',
+    hour12: false,
+  })
+    .formatToParts(now)
+    .reduce((acc, p) => ((acc[p.type] = Number(p.value)), acc), {});
+  const taipeiAsUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+  let targetTaipeiAsUtc = Date.UTC(parts.year, parts.month - 1, parts.day, 14, 0, 0);
+  if (taipeiAsUtc >= targetTaipeiAsUtc) targetTaipeiAsUtc += 86400_000;
+  return targetTaipeiAsUtc - taipeiAsUtc;
+}
+
+function computeSnapshotRows(doc, quotes) {
+  const stocks = Array.isArray(doc.stocks) ? doc.stocks : [];
+  const txs = Array.isArray(doc.transactions) ? doc.transactions : [];
+  return stocks.map((stock) => {
+    const fxSym = fxSymbolOf(stock.currency);
+    const fx = fxSym ? quotes[fxSym]?.price ?? null : 1;
+    const quote = quotes[stock.symbol];
+    let shares = 0;
+    let costNative = 0;
+    let investedTWD = 0;
+    let investedKnown = true;
+
+    for (const t of txs.filter((x) => x.stockId === stock.id)) {
+      shares += Number(t.shares) || 0;
+      costNative += (Number(t.shares) || 0) * (Number(t.price) || 0);
+      if (t.twdCost != null) {
+        investedTWD += Number(t.twdCost) * Math.sign(Number(t.shares) || 1);
+      } else if (fx != null) {
+        investedTWD += (Number(t.shares) || 0) * (Number(t.price) || 0) * fx;
+      } else {
+        investedKnown = false;
+      }
+    }
+
+    const price = quote?.price ?? null;
+    const valueTWD = price != null && fx != null ? shares * price * fx : shares === 0 ? 0 : null;
+    const invested = investedKnown ? investedTWD : null;
+    const pnl = valueTWD != null && invested != null ? valueTWD - invested : null;
+    return {
+      id: stock.id,
+      name: stock.name,
+      symbol: stock.symbol,
+      currency: stock.currency,
+      shares,
+      price,
+      fx,
+      invested,
+      valueTWD,
+      pnl,
+    };
+  });
+}
+
+async function createSnapshotForDoc(doc, source = 'manual') {
+  const stocks = Array.isArray(doc.stocks) ? doc.stocks : [];
+  const fxSyms = [...new Set(stocks.map((s) => fxSymbolOf(s.currency)).filter(Boolean))];
+  const symbols = [...new Set([...stocks.map((s) => s.symbol), ...fxSyms].filter(Boolean))];
+  const results = await Promise.allSettled(symbols.map(fetchQuote));
+  const quotes = {};
+  const errors = {};
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') quotes[symbols[i]] = r.value;
+    else errors[symbols[i]] = r.reason.message;
+  });
+
+  const holdings = computeSnapshotRows(doc, quotes);
+  const totalInvested = holdings.reduce((s, r) => s + (r.invested ?? 0), 0);
+  const anyValueMissing = holdings.some((r) => r.valueTWD == null);
+  const totalValue = anyValueMissing ? null : holdings.reduce((s, r) => s + r.valueTWD, 0);
+  const pnl = totalValue != null ? totalValue - totalInvested : null;
+  const pnlPct = pnl != null && totalInvested > 0 ? pnl / totalInvested : null;
+
+  return {
+    date: taipeiDateString(),
+    at: Date.now(),
+    source,
+    totalInvested,
+    totalValue,
+    pnl,
+    pnlPct,
+    holdings,
+    quoteErrors: errors,
+  };
+}
+
+function upsertSnapshot(doc, snapshot) {
+  const snapshots = Array.isArray(doc.snapshots) ? doc.snapshots : [];
+  return {
+    ...doc,
+    snapshots: [...snapshots.filter((s) => s.date !== snapshot.date), snapshot].sort((a, b) =>
+      String(a.date).localeCompare(String(b.date))
+    ),
+  };
+}
+
+async function recordSnapshotForUser(userId, source = 'manual') {
+  const doc = await readData(userId);
+  const snapshot = await createSnapshotForDoc(doc, source);
+  const nextDoc = upsertSnapshot(doc, snapshot);
+  await writeData(userId, nextDoc);
+  return snapshot;
 }
 
 function inferCurrency(symbol, currency) {
@@ -319,6 +470,42 @@ app.get('/api/quotes', async (req, res) => {
   res.json({ quotes, errors, fetchedAt: Date.now() });
 });
 
+app.post('/api/snapshots/today', async (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  try {
+    const snapshot = await recordSnapshotForUser(user.sub, 'manual');
+    res.json({ snapshot });
+  } catch (err) {
+    console.error('記錄市值快照失敗：', err.message);
+    res.status(500).json({ error: '記錄市值快照失敗' });
+  }
+});
+
+async function recordScheduledSnapshots() {
+  try {
+    const userIds = await listUserIds();
+    for (const userId of userIds) {
+      const doc = await readData(userId);
+      if (!Array.isArray(doc.transactions) || !doc.transactions.length) continue;
+      await recordSnapshotForUser(userId, 'scheduled');
+    }
+    console.log(`每日市值快照完成：${taipeiDateString()}，${userIds.length} 個使用者`);
+  } catch (err) {
+    console.error('每日市值快照失敗：', err.message);
+  }
+}
+
+function scheduleDailySnapshots() {
+  const delay = nextTaipeiTwoPmDelayMs();
+  setTimeout(async () => {
+    await recordScheduledSnapshots();
+    scheduleDailySnapshots();
+  }, delay);
+  console.log(`下一次每日市值快照排程：${Math.round(delay / 60_000)} 分鐘後（台北 14:00）`);
+}
+
 app.listen(PORT, () => {
   console.log(`Portfolio tracker listening on port ${PORT}`);
+  scheduleDailySnapshots();
 });

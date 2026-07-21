@@ -63,6 +63,7 @@ const state = {
   budget: DEFAULT_BUDGET,
   stocks: DEFAULT_STOCKS,
   transactions: [],
+  snapshots: [],
   quotes: {},
   quoteErrors: {},
   fetchedAt: null,
@@ -112,6 +113,7 @@ const quoteUrlOf = (symbol) => {
 // ---------- 資料存取 ----------
 function applyDoc(data) {
   state.transactions = Array.isArray(data.transactions) ? data.transactions : [];
+  state.snapshots = Array.isArray(data.snapshots) ? data.snapshots : [];
   if (Array.isArray(data.stocks) && data.stocks.length) {
     // 舊資料可能沒有 category 欄位，依 id 對回預設分類，找不到則標為「未分類」
     state.stocks = data.stocks.map((s) => ({
@@ -153,15 +155,17 @@ async function loadPortfolio() {
     const restored =
       tryApplyBackup(backupKey()) || tryApplyBackup('portfolio-backup:local') || tryApplyBackup('portfolio-backup');
     if (restored) {
-      savePortfolio();
+      savePortfolio({ includeSnapshots: true });
       showNotice('已將瀏覽器中的紀錄同步到你的帳號。');
     }
   }
 }
 
-async function savePortfolio() {
+async function savePortfolio({ includeSnapshots = false } = {}) {
+  const backup = { budget: state.budget, stocks: state.stocks, transactions: state.transactions, snapshots: state.snapshots };
   const payload = { budget: state.budget, stocks: state.stocks, transactions: state.transactions };
-  localStorage.setItem(backupKey(), JSON.stringify(payload));
+  if (includeSnapshots || isGuest()) payload.snapshots = state.snapshots;
+  localStorage.setItem(backupKey(), JSON.stringify(backup));
   if (isGuest()) return; // 訪客模式只存瀏覽器
   try {
     const res = await fetch('/api/portfolio', {
@@ -275,6 +279,15 @@ function sortedByTargetPercent(items, stockOf = (x) => x) {
     .map(({ item }) => item);
 }
 
+function todayTaipei() {
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Asia/Taipei',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
 // ---------- 畫面 ----------
 function render() {
   const rows = sortedByTargetPercent(state.stocks.map(computeStock), (r) => r.stock);
@@ -309,6 +322,7 @@ function render() {
 
   renderAllocationCollapsed();
   renderHoldings(rows, totalInvested, totalValue, totalPnl);
+  renderSnapshotChart();
   renderDonut(rows);
   renderTransactions();
 
@@ -323,6 +337,118 @@ function render() {
   $('updated-at').textContent = state.fetchedAt
     ? '更新於 ' + new Date(state.fetchedAt).toLocaleString('zh-TW', { hour12: false }) + (state.usingCachedQuotes ? '（快取）' : '')
     : '尚未取得報價';
+}
+
+function snapshotFromRows(rows, source = 'manual') {
+  const totalInvested = rows.reduce((s, r) => s + (r.invested ?? 0), 0);
+  const anyValueMissing = rows.some((r) => r.valueTWD == null);
+  const totalValue = anyValueMissing ? null : rows.reduce((s, r) => s + r.valueTWD, 0);
+  const pnl = totalValue != null ? totalValue - totalInvested : null;
+  const pnlPct = pnl != null && totalInvested > 0 ? pnl / totalInvested : null;
+  return {
+    date: todayTaipei(),
+    at: Date.now(),
+    source,
+    totalInvested,
+    totalValue,
+    pnl,
+    pnlPct,
+    holdings: rows.map((r) => ({
+      id: r.stock.id,
+      name: r.stock.name,
+      symbol: r.stock.symbol,
+      currency: r.stock.currency,
+      shares: r.shares,
+      price: r.price,
+      fx: fxRate(r.stock.currency),
+      invested: r.invested,
+      valueTWD: r.valueTWD,
+      pnl: r.pnl,
+    })),
+    quoteErrors: state.quoteErrors,
+  };
+}
+
+function upsertLocalSnapshot(snapshot) {
+  state.snapshots = [...state.snapshots.filter((s) => s.date !== snapshot.date), snapshot].sort((a, b) =>
+    String(a.date).localeCompare(String(b.date))
+  );
+}
+
+function scaleValue(n, min, max, lo, hi) {
+  if (max === min) return (lo + hi) / 2;
+  return hi - ((n - min) / (max - min)) * (hi - lo);
+}
+
+function renderSnapshotChart() {
+  const el = $('snapshot-chart');
+  const snapshots = state.snapshots
+    .filter((s) => s.totalValue != null && s.pnlPct != null)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+
+  $('snapshot-subtitle').textContent = snapshots.length
+    ? `已記錄 ${snapshots.length} 天；每天 14:00 自動更新，也可手動補記今日市值。`
+    : '每天 14:00 自動記錄；也可手動補記今日市值。';
+
+  if (!snapshots.length) {
+    el.innerHTML = '<div class="snapshot-empty">尚未有每日市值紀錄，按「記錄今日市值」建立第一筆。</div>';
+    return;
+  }
+
+  const width = 760;
+  const height = 280;
+  const pad = { l: 84, r: 76, t: 24, b: 42 };
+  const plotW = width - pad.l - pad.r;
+  const plotH = height - pad.t - pad.b;
+  const values = snapshots.map((s) => s.totalValue);
+  const pcts = snapshots.map((s) => s.pnlPct);
+  const vMin = Math.min(...values);
+  const vMax = Math.max(...values);
+  const pMaxAbs = Math.max(0.01, ...pcts.map((p) => Math.abs(p)));
+  const xOf = (i) => pad.l + (snapshots.length === 1 ? plotW / 2 : (i / (snapshots.length - 1)) * plotW);
+  const yVal = (v) => scaleValue(v, vMin, vMax, pad.t, pad.t + plotH);
+  const yPct = (p) => scaleValue(p, -pMaxAbs, pMaxAbs, pad.t, pad.t + plotH);
+  const linePath = (points) => points.map((p, i) => `${i ? 'L' : 'M'} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ');
+  const valuePath = linePath(snapshots.map((s, i) => [xOf(i), yVal(s.totalValue)]));
+  const pctPath = linePath(snapshots.map((s, i) => [xOf(i), yPct(s.pnlPct)]));
+  const zeroY = yPct(0);
+  const firstDate = snapshots[0].date.slice(5);
+  const lastDate = snapshots[snapshots.length - 1].date.slice(5);
+  const latest = snapshots[snapshots.length - 1];
+  const points = snapshots
+    .map(
+      (s, i) =>
+        `<circle class="snapshot-point" cx="${xOf(i).toFixed(1)}" cy="${yVal(s.totalValue).toFixed(1)}" r="3">
+          <title>${esc(s.date)}\n市值 ${fmtTWD(s.totalValue)}\n損益 ${fmtTWD(s.pnl)}（${signed(s.pnlPct, fmtPct)}）</title>
+        </circle>`
+    )
+    .join('');
+
+  el.innerHTML = `
+    <div class="snapshot-summary">
+      <span>最新市值 <strong>${fmtTWD(latest.totalValue)}</strong></span>
+      <span class="${pnlClass(latest.pnl ?? 0)}">未實現損益 <strong>${latest.pnl != null ? signed(latest.pnl, (n) => fmtTWD(n)) : '—'}</strong></span>
+      <span class="${pnlClass(latest.pnlPct ?? 0)}">損益率 <strong>${latest.pnlPct != null ? signed(latest.pnlPct, fmtPct) : '—'}</strong></span>
+    </div>
+    <svg viewBox="0 0 ${width} ${height}" class="snapshot-svg" role="img" aria-label="每日市值與損益率曲線圖">
+      <line x1="${pad.l}" y1="${pad.t}" x2="${pad.l}" y2="${pad.t + plotH}" class="axis-line"></line>
+      <line x1="${pad.l}" y1="${pad.t + plotH}" x2="${pad.l + plotW}" y2="${pad.t + plotH}" class="axis-line"></line>
+      <line x1="${pad.l + plotW}" y1="${pad.t}" x2="${pad.l + plotW}" y2="${pad.t + plotH}" class="axis-line"></line>
+      <line x1="${pad.l}" y1="${zeroY.toFixed(1)}" x2="${pad.l + plotW}" y2="${zeroY.toFixed(1)}" class="zero-line"></line>
+      <text x="${pad.l - 8}" y="${pad.t + 5}" text-anchor="end" class="axis-text">${fmtTWD(vMax)}</text>
+      <text x="${pad.l - 8}" y="${pad.t + plotH}" text-anchor="end" class="axis-text">${fmtTWD(vMin)}</text>
+      <text x="${pad.l + plotW + 8}" y="${pad.t + 5}" class="axis-text">${fmtPct(pMaxAbs)}</text>
+      <text x="${pad.l + plotW + 8}" y="${pad.t + plotH}" class="axis-text">${fmtPct(-pMaxAbs)}</text>
+      <text x="${pad.l}" y="${height - 12}" text-anchor="middle" class="axis-text">${esc(firstDate)}</text>
+      <text x="${pad.l + plotW}" y="${height - 12}" text-anchor="middle" class="axis-text">${esc(lastDate)}</text>
+      <path d="${valuePath}" class="value-line"></path>
+      <path d="${pctPath}" class="pct-line"></path>
+      ${points}
+    </svg>
+    <div class="snapshot-legend">
+      <span><i class="legend-line value"></i>總市值</span>
+      <span><i class="legend-line pct"></i>損益率（右軸）</span>
+    </div>`;
 }
 
 function renderHoldings(rows, totalInvested, totalValue, totalPnl) {
@@ -884,6 +1010,38 @@ function initForm() {
     btn.textContent = '↻ 更新報價';
   });
 
+  $('snapshot-btn').addEventListener('click', async () => {
+    const btn = $('snapshot-btn');
+    btn.disabled = true;
+    btn.textContent = '記錄中…';
+    try {
+      if (isGuest()) {
+        await loadQuotes();
+        const rows = sortedByTargetPercent(state.stocks.map(computeStock), (r) => r.stock);
+        const snapshot = snapshotFromRows(rows, 'manual');
+        upsertLocalSnapshot(snapshot);
+        await savePortfolio({ includeSnapshots: true });
+      } else {
+        const res = await fetch('/api/snapshots/today', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || '記錄失敗');
+        upsertLocalSnapshot(data.snapshot);
+        localStorage.setItem(backupKey(), JSON.stringify({
+          budget: state.budget,
+          stocks: state.stocks,
+          transactions: state.transactions,
+          snapshots: state.snapshots,
+        }));
+      }
+      render();
+    } catch (err) {
+      showNotice(err.message || '記錄今日市值失敗，請稍後再試。');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '記錄今日市值';
+    }
+  });
+
   $('basis-control').addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-basis]');
     if (!btn) return;
@@ -904,7 +1062,7 @@ function initForm() {
   }
 
   $('export-btn').addEventListener('click', () => {
-    const doc = { budget: state.budget, stocks: state.stocks, transactions: state.transactions };
+    const doc = { budget: state.budget, stocks: state.stocks, transactions: state.transactions, snapshots: state.snapshots };
     const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -922,7 +1080,7 @@ function initForm() {
       if (!Array.isArray(data.transactions)) throw new Error();
       if (!confirm(`將以備份檔（${data.transactions.length} 筆交易）覆蓋目前紀錄，確定嗎？`)) return;
       applyDoc(data);
-      await savePortfolio();
+      await savePortfolio({ includeSnapshots: true });
       rebuildStockSelect();
       render();
       loadQuotes().then(render);
@@ -974,6 +1132,7 @@ async function onGoogleCredential(response) {
     state.budget = DEFAULT_BUDGET;
     state.stocks = DEFAULT_STOCKS;
     state.transactions = [];
+    state.snapshots = [];
     await enterApp();
   } catch {
     const err = $('login-error');
