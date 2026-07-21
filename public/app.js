@@ -402,8 +402,8 @@ function renderSnapshotChart() {
   const plotH = height - pad.t - pad.b;
   const values = snapshots.map((s) => s.totalValue);
   const pcts = snapshots.map((s) => s.pnlPct);
-  const vMin = Math.min(...values);
-  const vMax = Math.max(...values);
+  const vMin = 0;
+  const vMax = Math.max(1, ...values);
   const pMaxAbs = Math.max(0.01, ...pcts.map((p) => Math.abs(p)));
   const xOf = (i) => pad.l + (snapshots.length === 1 ? plotW / 2 : (i / (snapshots.length - 1)) * plotW);
   const yVal = (v) => scaleValue(v, vMin, vMax, pad.t, pad.t + plotH);
