@@ -488,23 +488,24 @@ h1 { font-size: 1.5rem; font-weight: 700; }
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
-.value-line,
-.pct-line {
+.value-line {
   fill: none;
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 3;
 }
 .value-line { stroke: var(--series-1); }
-.pct-line { stroke: var(--up); stroke-dasharray: 7 6; }
-.snapshot-point,
-.pct-point {
+.snapshot-point {
   fill: var(--series-1);
   stroke: var(--surface);
   stroke-width: 2;
 }
-.pct-point { fill: var(--up); }
-.pct-point.down { fill: var(--down); }
+.pct-bar {
+  fill: color-mix(in srgb, var(--up) 68%, transparent);
+}
+.pct-bar.down {
+  fill: color-mix(in srgb, var(--down) 68%, transparent);
+}
 .snapshot-legend {
   display: flex;
   gap: 16px;
@@ -521,9 +522,14 @@ h1 { font-size: 1.5rem; font-weight: 700; }
   margin-right: 6px;
   vertical-align: middle;
 }
-.legend-line.pct {
-  border-color: var(--up);
-  border-top-style: dashed;
+.legend-bar {
+  display: inline-block;
+  width: 18px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--up);
+  margin-right: 6px;
+  vertical-align: -1px;
 }
 
 .bar-track {

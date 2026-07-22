@@ -414,7 +414,6 @@ function renderSnapshotChart() {
   const yPct = (p) => scaleValue(p, -pMaxAbs, pMaxAbs, pad.t, pad.t + plotH);
   const linePath = (points) => points.map((p, i) => `${i ? 'L' : 'M'} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ');
   const valuePath = linePath(snapshots.map((s, i) => [xOf(i), yVal(s.totalValue)]));
-  const pctPath = dailyPcts.length >= 2 ? linePath(dailyPcts.map((p) => [xOf(p.index), yPct(p.pct)])) : '';
   const zeroY = yPct(0);
   const firstDate = snapshots[0].date.slice(5);
   const lastDate = snapshots[snapshots.length - 1].date.slice(5);
@@ -427,12 +426,17 @@ function renderSnapshotChart() {
         </circle>`
     )
     .join('');
-  const pctPoints = dailyPcts
+  const barW = Math.max(6, Math.min(24, plotW / Math.max(12, snapshots.length * 1.5)));
+  const pctBars = dailyPcts
     .map(
-      (p) =>
-        `<circle class="pct-point ${pnlClass(p.pct)}" cx="${xOf(p.index).toFixed(1)}" cy="${yPct(p.pct).toFixed(1)}" r="3">
+      (p) => {
+        const y = yPct(p.pct);
+        const h = Math.max(2, Math.abs(y - zeroY));
+        const top = p.pct >= 0 ? y : zeroY;
+        return `<rect class="pct-bar ${pnlClass(p.pct)}" x="${(xOf(p.index) - barW / 2).toFixed(1)}" y="${top.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" rx="3">
           <title>${esc(p.snapshot.date)}\n當日漲跌 ${signed(p.pct, fmtPct)}\n市值 ${fmtTWD(p.snapshot.totalValue)}</title>
-        </circle>`
+        </rect>`;
+      }
     )
     .join('');
   const latestDailyPct = dailyPcts.length ? dailyPcts[dailyPcts.length - 1].pct : null;
@@ -454,14 +458,13 @@ function renderSnapshotChart() {
       <text x="${pad.l + plotW + 8}" y="${pad.t + plotH}" class="axis-text">${fmtPct(-pMaxAbs)}</text>
       <text x="${pad.l}" y="${height - 12}" text-anchor="middle" class="axis-text">${esc(firstDate)}</text>
       <text x="${pad.l + plotW}" y="${height - 12}" text-anchor="middle" class="axis-text">${esc(lastDate)}</text>
+      ${pctBars}
       <path d="${valuePath}" class="value-line"></path>
-      ${pctPath ? `<path d="${pctPath}" class="pct-line"></path>` : ''}
       ${points}
-      ${pctPoints}
     </svg>
     <div class="snapshot-legend">
       <span><i class="legend-line value"></i>總市值</span>
-      <span><i class="legend-line pct"></i>每日漲跌幅（右軸）</span>
+      <span><i class="legend-bar pct"></i>每日漲跌幅（右軸）</span>
     </div>`;
 }
 
