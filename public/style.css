@@ -731,6 +731,11 @@ tfoot td {
 .tx-form-actions { display: flex; gap: 8px; }
 .tx-form-actions .btn-primary { flex: 1; }
 
+/* 再平衡建議：依台灣券商慣例 買紅、賣綠 */
+.action-buy { color: var(--up); font-weight: 600; }
+.action-sell { color: var(--down); font-weight: 600; }
+.rebalance-table .cell-sub { font-weight: 400; }
+
 .hint { color: var(--text-muted); font-size: 0.78rem; margin-top: 10px; }
 
 .budget-field {

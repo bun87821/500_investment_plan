@@ -181,6 +181,34 @@
       <p class="hint">※ SK hynix 未在台/美上市，以韓國原股 000660.KS 報價（可透過複委託買入）。美股、韓股金額以即時匯率換算為台幣。</p>
     </section>
 
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h2>再平衡建議</h2>
+          <p class="section-subtitle">依目標比例與現價算出每檔還該買（賣）多少<span id="rebalance-note"></span></p>
+        </div>
+        <div class="segmented" id="rebalance-base-control">
+          <button type="button" data-base="budget">依總預算</button>
+          <button type="button" data-base="value">依目前市值</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="rebalance-table">
+          <thead>
+            <tr>
+              <th>標的</th>
+              <th class="num">目前佔比 → 目標</th>
+              <th class="num">偏離金額</th>
+              <th>建議動作</th>
+            </tr>
+          </thead>
+          <tbody id="rebalance-body"></tbody>
+        </table>
+      </div>
+      <p class="hint" id="rebalance-balanced" hidden></p>
+      <p class="hint">「依總預算」適合還在分批投入時（把剩餘資金投向落後最多的標的）；「依目前市值」是不加錢的純再平衡（會出現減碼建議）。偏離小於基準的 1% 視為已平衡。建議僅供參考，未計入手續費與稅。</p>
+    </section>
+
     <section class="grid-2">
       <div class="card">
         <h2 id="tx-form-title">新增交易</h2>

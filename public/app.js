@@ -385,6 +385,7 @@ function render() {
 
   renderAllocationCollapsed();
   renderHoldings(rows, totalInvested, totalValue, totalPnl);
+  renderRebalance(rows, totalValue);
   renderSnapshotChart(rows);
   renderDonut(rows);
   renderTransactions();
@@ -1366,6 +1367,73 @@ async function importCsv(text) {
   loadHistory();
 }
 
+// ---------- 再平衡建議 ----------
+let rebalanceBase = localStorage.getItem('rebalance-base') || 'budget';
+
+function renderRebalance(rows, totalValue) {
+  document.querySelectorAll('#rebalance-base-control button').forEach((b) => {
+    b.classList.toggle('active', b.dataset.base === rebalanceBase);
+  });
+
+  const useValue = rebalanceBase === 'value' && totalValue != null && totalValue > 0;
+  const anchor = useValue ? totalValue : state.budget;
+  $('rebalance-note').textContent =
+    rebalanceBase === 'value' && !useValue ? '（目前市值不可用，暫以總預算計算）' : '';
+
+  const threshold = anchor * 0.01;
+  const items = [];
+  let balancedCount = 0;
+  for (const r of rows) {
+    const target = (anchor * (Number(r.stock.percent) || 0)) / 100;
+    const current = r.valueTWD ?? 0;
+    const deficit = target - current;
+    if (Math.abs(deficit) < threshold) {
+      balancedCount++;
+      continue;
+    }
+    const fx = fxRate(r.stock.currency);
+    const priceTWD = r.price != null && fx != null && r.price > 0 ? r.price * fx : null;
+    // 買進位到整股（無條件捨去，避免超買）；賣出同樣取整
+    const suggShares = priceTWD ? Math.trunc(deficit / priceTWD) : null;
+    items.push({ r, target, current, deficit, priceTWD, suggShares });
+  }
+  items.sort((a, b) => Math.abs(b.deficit) - Math.abs(a.deficit));
+
+  const body = $('rebalance-body');
+  body.innerHTML = items
+    .map(({ r, current, deficit, priceTWD, suggShares }) => {
+      const buy = deficit > 0;
+      const action =
+        suggShares != null && suggShares !== 0
+          ? `<span class="${buy ? 'action-buy' : 'action-sell'}">${buy ? '買入' : '減碼'} ${fmtNum(Math.abs(suggShares), 0)} 股</span>` +
+            `<span class="cell-sub">約 ${fmtTWD(Math.abs(suggShares) * priceTWD)}</span>`
+          : `<span class="${buy ? 'action-buy' : 'action-sell'}">${buy ? '加碼' : '減碼'}約 ${fmtTWD(Math.abs(deficit))}</span>` +
+            (priceTWD == null ? '<span class="cell-sub">（無現價，僅列金額）</span>' : '');
+      return `
+        <tr>
+          <td>
+            <div class="stock-name">${esc(r.stock.name)}</div>
+            <div class="stock-meta"><span>${esc(tickerOf(r.stock.symbol))}</span></div>
+          </td>
+          <td class="num">${fmtPct(current / anchor)} → ${fmtNum(r.stock.percent, 1)}%</td>
+          <td class="num ${buy ? '' : 'down'}">${signed(deficit, (n) => fmtTWD(n))}</td>
+          <td>${action}</td>
+        </tr>`;
+    })
+    .join('');
+
+  const balancedEl = $('rebalance-balanced');
+  if (!items.length) {
+    balancedEl.textContent = '所有標的都在目標比例 ±1% 內，目前不需要調整。';
+    balancedEl.hidden = false;
+  } else if (balancedCount > 0) {
+    balancedEl.textContent = `另有 ${balancedCount} 檔已在目標 ±1% 內，未列出。`;
+    balancedEl.hidden = false;
+  } else {
+    balancedEl.hidden = true;
+  }
+}
+
 function rebuildStockSelect() {
   const select = $('tx-stock');
   const prev = select.value;
@@ -1740,6 +1808,14 @@ function initForm() {
     if (!btn) return;
     chartBasis = btn.dataset.basis;
     basisLocked = true;
+    render();
+  });
+
+  $('rebalance-base-control').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-base]');
+    if (!btn) return;
+    rebalanceBase = btn.dataset.base;
+    localStorage.setItem('rebalance-base', rebalanceBase);
     render();
   });
 

@@ -119,6 +119,19 @@ test('端對端：已實現損益、歷史回推圖、XIRR、編輯與 CSV 匯�
   assert.ok(await page.locator('.bench-line').count(), '開啟後應畫出 0050 對比線');
   assert.ok((await page.textContent('.snapshot-legend')).includes('0050'));
 
+  // --- 再平衡建議 ---
+  // 依總預算（預設）：台達電目標 7%×500萬＝35 萬、現價 439.5 → 建議買入 796 股
+  let rebalanceText = await page.textContent('#rebalance-body');
+  assert.ok(rebalanceText.includes('台達電'), '未持有的台達電應出現加碼建議');
+  assert.ok(rebalanceText.includes('買入') && rebalanceText.includes('796'), `應建議買入 796 股：${rebalanceText.slice(0, 200)}`);
+  // 依目前市值：2330 佔比遠超 25% → 應出現減碼建議
+  await page.click('#rebalance-base-control button[data-base="value"]');
+  await page.waitForTimeout(300);
+  rebalanceText = await page.textContent('#rebalance-body');
+  assert.ok(rebalanceText.includes('減碼'), '依市值再平衡應出現減碼建議');
+  await page.click('#rebalance-base-control button[data-base="budget"]');
+  await page.waitForTimeout(200);
+
   // --- 顯示範圍切換 ---
   await page.click('#hist-range-control button[data-range="1mo"]');
   await page.waitForTimeout(300);
