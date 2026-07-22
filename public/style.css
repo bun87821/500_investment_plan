@@ -9,6 +9,7 @@
   --border: rgba(11, 11, 11, 0.10);
   --soft-border: rgba(11, 11, 11, 0.07);
   --series-1: #2a78d6;
+  --series-2: #1baf7a;
   /* 台股慣例：紅漲綠跌 */
   --up: #c73535;
   --down: #006300;
@@ -28,6 +29,7 @@
     --border: rgba(255, 255, 255, 0.10);
     --soft-border: rgba(255, 255, 255, 0.08);
     --series-1: #3987e5;
+    --series-2: #199e70;
     --up: #e66767;
     --down: #0ca30c;
     --warn-bg: #3a3212;
@@ -510,6 +512,22 @@ h1 { font-size: 1.5rem; font-weight: 700; }
   stroke-width: 1.5;
   stroke-dasharray: 5 4;
 }
+.bench-line {
+  fill: none;
+  stroke: var(--series-2);
+  stroke-width: 1.75;
+}
+.legend-line.bench { border-top: 2px solid var(--series-2); }
+.bench-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.bench-toggle input { accent-color: var(--series-2); }
 .snapshot-point {
   fill: var(--series-1);
   stroke: var(--surface);
@@ -693,14 +711,25 @@ tfoot td {
   outline-offset: 1px;
 }
 
-.tx-del {
+.tx-del, .tx-edit {
   border: none;
   background: none;
   color: var(--text-muted);
   cursor: pointer;
   font-size: 0.9rem;
+  padding: 2px 4px;
 }
 .tx-del:hover { color: var(--up); }
+.tx-edit:hover { color: var(--series-1); }
+.tx-actions { white-space: nowrap; }
+
+.chip-kind { font-size: 0.68rem; padding: 0 5px; vertical-align: 1px; }
+.chip-kind.buy { color: var(--up); }
+.chip-kind.sell { color: var(--down); }
+.chip-kind.div { color: var(--series-1); }
+
+.tx-form-actions { display: flex; gap: 8px; }
+.tx-form-actions .btn-primary { flex: 1; }
 
 .hint { color: var(--text-muted); font-size: 0.78rem; margin-top: 10px; }
 

@@ -111,8 +111,12 @@ app.post('/api/auth/logout', (req, res) => {
 
 // ---- 資料儲存：有 DATABASE_URL（Railway Postgres 自動注入）就用 Postgres，
 //      否則存本機 JSON 檔（Railway 檔案系統重新部署會清空，僅適合本機開發）----
-let readData;
-let writeData;
+// readDoc(userId) → { doc, rev }
+// writeDoc(userId, doc, expectedRev) → 新的 rev；expectedRev 不符時丟 ConflictError（樂觀鎖，
+// 防止同帳號多裝置同時操作互相覆蓋）。expectedRev 傳 null 表示無條件覆寫（僅限相容舊客戶端）。
+class ConflictError extends Error {}
+let readDoc;
+let writeDoc;
 let listUserIds;
 
 if (process.env.DATABASE_URL) {
@@ -128,6 +132,7 @@ if (process.env.DATABASE_URL) {
     await pool.query(
       'CREATE TABLE IF NOT EXISTS portfolios (user_id TEXT PRIMARY KEY, data JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())'
     );
+    await pool.query('ALTER TABLE portfolios ADD COLUMN IF NOT EXISTS rev BIGINT NOT NULL DEFAULT 0');
     // 從舊版單列 portfolio 資料表搬移既有資料到 'legacy'（只在第一次執行時發生）
     try {
       await pool.query(
@@ -139,17 +144,24 @@ if (process.env.DATABASE_URL) {
     console.log(`儲存後端：Postgres（${AUTH_ENABLED ? '多人模式' : '單人模式'}）`);
   })();
 
-  readData = async (userId) => {
+  readDoc = async (userId) => {
     await ready;
-    const r = await pool.query('SELECT data FROM portfolios WHERE user_id = $1', [userId]);
-    return r.rows[0]?.data ?? { transactions: [] };
+    const r = await pool.query('SELECT data, rev FROM portfolios WHERE user_id = $1', [userId]);
+    return { doc: r.rows[0]?.data ?? { transactions: [] }, rev: Number(r.rows[0]?.rev ?? 0) };
   };
-  writeData = async (userId, data) => {
+  writeDoc = async (userId, doc, expectedRev = null) => {
     await ready;
-    await pool.query(
-      'INSERT INTO portfolios (user_id, data) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()',
-      [userId, JSON.stringify(data)]
+    const condition = expectedRev == null ? '' : 'WHERE portfolios.rev = $3';
+    const params = expectedRev == null ? [userId, JSON.stringify(doc)] : [userId, JSON.stringify(doc), expectedRev];
+    const r = await pool.query(
+      `INSERT INTO portfolios (user_id, data, rev) VALUES ($1, $2, 1)
+       ON CONFLICT (user_id) DO UPDATE SET data = EXCLUDED.data, rev = portfolios.rev + 1, updated_at = now()
+       ${condition}
+       RETURNING rev`,
+      params
     );
+    if (!r.rowCount) throw new ConflictError('版本衝突');
+    return Number(r.rows[0].rev);
   };
   listUserIds = async () => {
     await ready;
@@ -165,19 +177,25 @@ if (process.env.DATABASE_URL) {
       ? path.join(DATA_DIR, 'portfolio.json')
       : path.join(DATA_DIR, 'users', encodeURIComponent(userId) + '.json');
 
-  readData = async (userId) => {
+  readDoc = async (userId) => {
     try {
-      return JSON.parse(fs.readFileSync(fileOf(userId), 'utf8'));
+      const raw = JSON.parse(fs.readFileSync(fileOf(userId), 'utf8'));
+      const { rev, ...doc } = raw;
+      return { doc, rev: Number(rev) || 0 };
     } catch {
-      return { transactions: [] };
+      return { doc: { transactions: [] }, rev: 0 };
     }
   };
-  writeData = async (userId, data) => {
+  writeDoc = async (userId, doc, expectedRev = null) => {
+    const { rev: currentRev } = await readDoc(userId);
+    if (expectedRev != null && expectedRev !== currentRev) throw new ConflictError('版本衝突');
+    const nextRev = currentRev + 1;
     const file = fileOf(userId);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const tmp = file + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+    fs.writeFileSync(tmp, JSON.stringify({ ...doc, rev: nextRev }, null, 2));
     fs.renameSync(tmp, file);
+    return nextRev;
   };
   listUserIds = async () => {
     const ids = [];
@@ -198,7 +216,8 @@ app.get('/api/portfolio', async (req, res) => {
   const user = requireUser(req, res);
   if (!user) return;
   try {
-    res.json(await readData(user.sub));
+    const { doc, rev } = await readDoc(user.sub);
+    res.json({ ...doc, rev });
   } catch (err) {
     console.error('讀取失敗：', err.message);
     res.status(500).json({ error: '讀取資料失敗' });
@@ -233,9 +252,15 @@ app.put('/api/portfolio', async (req, res) => {
     doc.snapshots = body.snapshots;
   }
   try {
-    await writeData(user.sub, doc);
-    res.json({ ok: true });
+    // 樂觀鎖：客戶端帶上讀取時的 rev，不符表示其他裝置已改過 → 409 附最新資料
+    const expectedRev = body.rev === undefined ? null : Number(body.rev);
+    const rev = await writeDoc(user.sub, doc, Number.isNaN(expectedRev) ? null : expectedRev);
+    res.json({ ok: true, rev });
   } catch (err) {
+    if (err instanceof ConflictError) {
+      const { doc: current, rev } = await readDoc(user.sub).catch(() => ({ doc: null, rev: null }));
+      return res.status(409).json({ error: '資料已在其他裝置更新', current: current ? { ...current, rev } : null });
+    }
     console.error('寫入失敗：', err.message);
     res.status(500).json({ error: '寫入資料失敗' });
   }
@@ -301,6 +326,7 @@ function nextTaipeiTwoPmDelayMs(now = new Date()) {
   return targetTaipeiAsUtc - taipeiAsUtc;
 }
 
+// 與前端 computeStock 相同的平均成本法重放（invested＝持有部位成本；配息不影響持股）
 function computeSnapshotRows(doc, quotes) {
   const stocks = Array.isArray(doc.stocks) ? doc.stocks : [];
   const txs = Array.isArray(doc.transactions) ? doc.transactions : [];
@@ -309,25 +335,35 @@ function computeSnapshotRows(doc, quotes) {
     const fx = fxSym ? quotes[fxSym]?.price ?? null : 1;
     const quote = quotes[stock.symbol];
     let shares = 0;
-    let costNative = 0;
-    let investedTWD = 0;
+    let costTWD = 0;
     let investedKnown = true;
 
-    for (const t of txs.filter((x) => x.stockId === stock.id)) {
-      shares += Number(t.shares) || 0;
-      costNative += (Number(t.shares) || 0) * (Number(t.price) || 0);
-      if (t.twdCost != null) {
-        investedTWD += Number(t.twdCost) * Math.sign(Number(t.shares) || 1);
-      } else if (fx != null) {
-        investedTWD += (Number(t.shares) || 0) * (Number(t.price) || 0) * fx;
-      } else {
-        investedKnown = false;
+    const mine = txs
+      .filter((x) => x.stockId === stock.id && x.kind !== 'dividend')
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    for (const t of mine) {
+      const s = Number(t.shares) || 0;
+      const price = Number(t.price) || 0;
+      let flowTWD = null;
+      if (t.twdCost != null) flowTWD = Math.abs(Number(t.twdCost));
+      else if (fx != null) flowTWD = Math.abs(s) * price * fx;
+      else investedKnown = false;
+
+      if (s > 0) {
+        if (flowTWD != null) costTWD += flowTWD;
+        shares += s;
+      } else if (s < 0) {
+        const sell = -s;
+        const removed = Math.min(sell, Math.max(shares, 0));
+        const avgTWD = shares > 0 ? costTWD / shares : 0;
+        costTWD -= avgTWD * removed;
+        shares -= sell;
       }
     }
 
     const price = quote?.price ?? null;
     const valueTWD = price != null && fx != null ? shares * price * fx : shares === 0 ? 0 : null;
-    const invested = investedKnown ? investedTWD : null;
+    const invested = investedKnown ? costTWD : null;
     const pnl = valueTWD != null && invested != null ? valueTWD - invested : null;
     return {
       id: stock.id,
@@ -387,11 +423,17 @@ function upsertSnapshot(doc, snapshot) {
 }
 
 async function recordSnapshotForUser(userId, source = 'manual') {
-  const doc = await readData(userId);
-  const snapshot = await createSnapshotForDoc(doc, source);
-  const nextDoc = upsertSnapshot(doc, snapshot);
-  await writeData(userId, nextDoc);
-  return snapshot;
+  // 帶樂觀鎖的讀-改-寫；撞到其他寫入就重讀重試一次
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { doc, rev } = await readDoc(userId);
+    const snapshot = await createSnapshotForDoc(doc, source);
+    try {
+      const newRev = await writeDoc(userId, upsertSnapshot(doc, snapshot), rev);
+      return { snapshot, rev: newRev };
+    } catch (err) {
+      if (!(err instanceof ConflictError) || attempt === 1) throw err;
+    }
+  }
 }
 
 function inferCurrency(symbol, currency) {
@@ -470,12 +512,58 @@ app.get('/api/quotes', async (req, res) => {
   res.json({ quotes, errors, fetchedAt: Date.now() });
 });
 
+// ---- 歷史日線代理（回推每日市值用）----
+const histCache = new Map(); // symbol|range -> { at, data }
+const HIST_CACHE_MS = 15 * 60 * 1000;
+const HIST_RANGES = new Set(['1mo', '3mo', '6mo', '1y', '2y', '5y', '10y', 'max']);
+
+async function fetchHistory(symbol, range) {
+  const key = symbol + '|' + range;
+  const cached = histCache.get(key);
+  if (cached && Date.now() - cached.at < HIST_CACHE_MS) return cached.data;
+
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=1d`;
+  const resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (portfolio-tracker)' } });
+  if (!resp.ok) throw new Error(`Yahoo 回應 ${resp.status}`);
+  const json = await resp.json();
+  const result = json?.chart?.result?.[0];
+  const ts = result?.timestamp || [];
+  const closes = result?.indicators?.quote?.[0]?.close || [];
+  const points = [];
+  for (let i = 0; i < ts.length; i++) {
+    if (closes[i] != null) points.push([ts[i] * 1000, closes[i]]);
+  }
+  if (!points.length) throw new Error('無歷史資料');
+  histCache.set(key, { at: Date.now(), data: points });
+  return points;
+}
+
+app.get('/api/history', async (req, res) => {
+  const range = String(req.query.range || '3mo');
+  if (!HIST_RANGES.has(range)) return res.status(400).json({ error: 'range 無效' });
+  const symbols = String(req.query.symbols || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 60);
+  if (!symbols.length) return res.status(400).json({ error: '缺少 symbols 參數' });
+
+  const results = await Promise.allSettled(symbols.map((s) => fetchHistory(s, range)));
+  const series = {};
+  const errors = {};
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') series[symbols[i]] = r.value;
+    else errors[symbols[i]] = r.reason.message;
+  });
+  res.json({ series, errors, fetchedAt: Date.now() });
+});
+
 app.post('/api/snapshots/today', async (req, res) => {
   const user = requireUser(req, res);
   if (!user) return;
   try {
-    const snapshot = await recordSnapshotForUser(user.sub, 'manual');
-    res.json({ snapshot });
+    const { snapshot, rev } = await recordSnapshotForUser(user.sub, 'manual');
+    res.json({ snapshot, rev });
   } catch (err) {
     console.error('記錄市值快照失敗：', err.message);
     res.status(500).json({ error: '記錄市值快照失敗' });
@@ -486,7 +574,7 @@ async function recordScheduledSnapshots() {
   try {
     const userIds = await listUserIds();
     for (const userId of userIds) {
-      const doc = await readData(userId);
+      const { doc } = await readDoc(userId);
       if (!Array.isArray(doc.transactions) || !doc.transactions.length) continue;
       await recordSnapshotForUser(userId, 'scheduled');
     }

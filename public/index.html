@@ -59,6 +59,11 @@
         <div class="kpi-sub" id="kpi-pnl-sub"></div>
       </div>
       <div class="kpi">
+        <div class="kpi-label">已實現損益</div>
+        <div class="kpi-value" id="kpi-realized">—</div>
+        <div class="kpi-sub" id="kpi-realized-sub">賣出損益＋股利</div>
+      </div>
+      <div class="kpi">
         <div class="kpi-label">整體投資進度</div>
         <div class="kpi-value" id="kpi-progress">—</div>
         <div class="kpi-sub" id="kpi-progress-sub">目標 NT$5,000,000</div>
@@ -81,9 +86,19 @@
       <div class="card-head">
         <div>
           <h2>每日市值與損益</h2>
-          <p class="section-subtitle" id="snapshot-subtitle">每天 14:00 自動記錄；也可手動補記今日市值。</p>
+          <p class="section-subtitle" id="snapshot-subtitle">載入中…</p>
         </div>
-        <button type="button" id="snapshot-btn" class="btn btn-ghost">記錄今日市值</button>
+        <div class="chart-actions">
+          <label class="bench-toggle"><input type="checkbox" id="bench-toggle" /> 對比 0050</label>
+          <div class="segmented" id="hist-range-control">
+            <button type="button" data-range="1mo">1月</button>
+            <button type="button" data-range="3mo">3月</button>
+            <button type="button" data-range="6mo">6月</button>
+            <button type="button" data-range="1y">1年</button>
+            <button type="button" data-range="all">全部</button>
+          </div>
+          <button type="button" id="snapshot-btn" class="btn btn-ghost">記錄今日市值</button>
+        </div>
       </div>
       <div class="snapshot-chart" id="snapshot-chart"></div>
     </section>
@@ -168,8 +183,15 @@
 
     <section class="grid-2">
       <div class="card">
-        <h2>新增交易</h2>
+        <h2 id="tx-form-title">新增交易</h2>
         <form id="tx-form" class="tx-form">
+          <label>
+            類型
+            <select id="tx-kind">
+              <option value="trade">買賣</option>
+              <option value="dividend">現金股利</option>
+            </select>
+          </label>
           <label>
             標的
             <select id="tx-stock" required></select>
@@ -178,23 +200,35 @@
             日期
             <input type="date" id="tx-date" required />
           </label>
-          <label>
+          <label id="tx-shares-label">
             股數
-            <input type="text" id="tx-shares" inputmode="decimal" required placeholder="賣出請輸入負數" />
+            <input type="text" id="tx-shares" inputmode="decimal" placeholder="賣出請輸入負數" />
           </label>
-          <label>
+          <label id="tx-price-label">
             每股價格（原幣）
-            <input type="text" id="tx-price" inputmode="decimal" required placeholder="以該股票交易幣別計" />
+            <input type="text" id="tx-price" inputmode="decimal" placeholder="以該股票交易幣別計" />
+          </label>
+          <label id="tx-amount-label" hidden>
+            配息金額（原幣總額）
+            <input type="text" id="tx-amount" inputmode="decimal" placeholder="這次收到的現金股利總額" />
           </label>
           <label>
-            台幣總成本（選填）
+            <span id="tx-twd-caption">台幣總成本（選填）</span>
             <input type="text" id="tx-twd" inputmode="decimal" placeholder="留空則以即時匯率換算" />
           </label>
-          <button type="submit" class="btn btn-primary">新增交易</button>
+          <div class="tx-form-actions">
+            <button type="submit" id="tx-submit" class="btn btn-primary">新增交易</button>
+            <button type="button" id="tx-cancel-edit" class="btn" hidden>取消編輯</button>
+          </div>
         </form>
+        <p class="hint">股票股利可用「買賣」記一筆價格 0 的買入。</p>
       </div>
       <div class="card">
-        <h2>交易紀錄</h2>
+        <div class="card-head">
+          <h2>交易紀錄</h2>
+          <button type="button" id="csv-btn" class="btn btn-ghost">匯入 CSV</button>
+          <input type="file" id="csv-file" accept=".csv,text/csv" hidden />
+        </div>
         <div class="table-wrap">
           <table class="tx-table">
             <thead>
@@ -211,6 +245,7 @@
           </table>
         </div>
         <p class="hint" id="tx-empty">尚無交易紀錄，從左側表單新增第一筆買入。</p>
+        <p class="hint">CSV 欄位：date, stock, shares, price, twd, kind（有無標題列皆可）。stock 可填代號或名稱；twd、kind 選填；配息列 kind 填「息」、price 欄填配息總額（原幣）、shares 留空。</p>
       </div>
     </section>
 

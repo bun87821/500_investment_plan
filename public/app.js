@@ -64,6 +64,7 @@ const state = {
   stocks: DEFAULT_STOCKS,
   transactions: [],
   snapshots: [],
+  rev: 0, // 伺服器資料版本（樂觀鎖）
   quotes: {},
   quoteErrors: {},
   fetchedAt: null,
@@ -112,6 +113,7 @@ const quoteUrlOf = (symbol) => {
 
 // ---------- 資料存取 ----------
 function applyDoc(data) {
+  if (data.rev !== undefined) state.rev = Number(data.rev) || 0;
   state.transactions = Array.isArray(data.transactions) ? data.transactions : [];
   state.snapshots = Array.isArray(data.snapshots) ? data.snapshots : [];
   if (Array.isArray(data.stocks) && data.stocks.length) {
@@ -163,7 +165,7 @@ async function loadPortfolio() {
 
 async function savePortfolio({ includeSnapshots = false } = {}) {
   const backup = { budget: state.budget, stocks: state.stocks, transactions: state.transactions, snapshots: state.snapshots };
-  const payload = { budget: state.budget, stocks: state.stocks, transactions: state.transactions };
+  const payload = { budget: state.budget, stocks: state.stocks, transactions: state.transactions, rev: state.rev };
   if (includeSnapshots || isGuest()) payload.snapshots = state.snapshots;
   localStorage.setItem(backupKey(), JSON.stringify(backup));
   if (isGuest()) return; // 訪客模式只存瀏覽器
@@ -177,7 +179,20 @@ async function savePortfolio({ includeSnapshots = false } = {}) {
       showNotice('登入已過期，資料暫存在瀏覽器中 — 請重新整理頁面登入後再操作一次。');
       return;
     }
+    if (res.status === 409) {
+      // 其他裝置改過資料：改用伺服器最新版，提醒使用者重做這次操作
+      const data = await res.json().catch(() => ({}));
+      if (data.current) {
+        applyDoc(data.current);
+        rebuildStockSelect();
+        render();
+      }
+      showNotice('資料已在其他裝置更新，畫面已載入最新版本 — 請確認後再操作一次。');
+      return;
+    }
     if (!res.ok) throw new Error();
+    const data = await res.json();
+    if (data.rev !== undefined) state.rev = Number(data.rev) || state.rev;
   } catch {
     showNotice('儲存到伺服器失敗，資料暫存在瀏覽器中，請稍後重試或匯出備份。');
   }
@@ -233,25 +248,51 @@ function fxRate(currency) {
   return q ? q.price : null;
 }
 
+// 依日期順序以「平均成本法」重放交易：
+// - invested＝目前持有部位的成本（賣出時按平均成本扣減，而非扣掉賣出金額）
+// - realized＝已實現損益（賣出金額 − 平均成本 × 賣出股數）
+// - dividends＝現金股利收入（kind:'dividend' 的紀錄）
 function computeStock(stock) {
-  const txs = state.transactions.filter((t) => t.stockId === stock.id);
   const fx = fxRate(stock.currency);
   const quote = state.quotes[stock.symbol];
+  const txs = state.transactions
+    .filter((t) => t.stockId === stock.id)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
 
   let shares = 0;
+  let costTWD = 0;
   let costNative = 0;
-  let investedTWD = 0;
+  let realized = 0;
+  let dividends = 0;
   let investedKnown = true;
 
   for (const t of txs) {
-    shares += t.shares;
-    costNative += t.shares * t.price;
-    if (t.twdCost != null) {
-      investedTWD += t.twdCost * Math.sign(t.shares || 1);
-    } else if (fx != null) {
-      investedTWD += t.shares * t.price * fx;
-    } else {
-      investedKnown = false;
+    if (t.kind === 'dividend') {
+      if (t.twdCost != null) dividends += Number(t.twdCost) || 0;
+      else if (fx != null) dividends += (Number(t.amount) || 0) * fx;
+      else investedKnown = false;
+      continue;
+    }
+    const s = Number(t.shares) || 0;
+    const price = Number(t.price) || 0;
+    let flowTWD = null; // 買＝台幣成本；賣＝台幣入帳
+    if (t.twdCost != null) flowTWD = Math.abs(Number(t.twdCost));
+    else if (fx != null) flowTWD = Math.abs(s) * price * fx;
+    else investedKnown = false;
+
+    if (s > 0) {
+      if (flowTWD != null) costTWD += flowTWD;
+      costNative += s * price;
+      shares += s;
+    } else if (s < 0) {
+      const sell = -s;
+      const removed = Math.min(sell, Math.max(shares, 0));
+      const avgTWD = shares > 0 ? costTWD / shares : 0;
+      const avgNat = shares > 0 ? costNative / shares : 0;
+      if (flowTWD != null) realized += flowTWD - avgTWD * removed;
+      costTWD -= avgTWD * removed;
+      costNative -= avgNat * removed;
+      shares -= sell;
     }
   }
 
@@ -259,13 +300,26 @@ function computeStock(stock) {
   const avgCost = shares > 0 ? costNative / shares : null;
   const price = quote ? quote.price : null;
   const valueTWD = price != null && fx != null ? shares * price * fx : shares === 0 ? 0 : null;
-  const invested = investedKnown ? investedTWD : null;
+  const invested = investedKnown ? costTWD : null;
   const pnl = valueTWD != null && invested != null ? valueTWD - invested : null;
   const progress = invested != null && targetTWD > 0 ? invested / targetTWD : null;
   const dayChange =
     quote && quote.previousClose ? (quote.price - quote.previousClose) / quote.previousClose : null;
 
-  return { stock, shares, avgCost, invested, targetTWD, price, valueTWD, pnl, progress, dayChange };
+  return {
+    stock,
+    shares,
+    avgCost,
+    invested,
+    targetTWD,
+    price,
+    valueTWD,
+    pnl,
+    progress,
+    dayChange,
+    realized: investedKnown ? realized : null,
+    dividends: investedKnown ? dividends : null,
+  };
 }
 
 function sortedByTargetPercent(items, stockOf = (x) => x) {
@@ -311,6 +365,15 @@ function render() {
   pnlEl.className = 'kpi-value ' + pnlClass(totalPnl ?? 0);
   $('kpi-pnl-sub').textContent =
     totalPnl != null && totalInvested > 0 ? '報酬率 ' + signed(totalPnl / totalInvested, fmtPct) : '';
+
+  const totalRealizedTrade = rows.reduce((s, r) => s + (r.realized ?? 0), 0);
+  const totalDividends = rows.reduce((s, r) => s + (r.dividends ?? 0), 0);
+  const totalRealized = totalRealizedTrade + totalDividends;
+  const realizedEl = $('kpi-realized');
+  realizedEl.textContent = signed(totalRealized, (n) => fmtTWD(n));
+  realizedEl.className = 'kpi-value ' + pnlClass(totalRealized);
+  $('kpi-realized-sub').textContent = totalDividends !== 0 ? '含股利 ' + fmtTWD(totalDividends) : '賣出損益＋股利';
+
   $('kpi-progress').textContent = fmtPct(overallProgress);
   $('kpi-progress-sub').textContent = '目標 ' + fmtTWD(state.budget);
 
@@ -322,7 +385,7 @@ function render() {
 
   renderAllocationCollapsed();
   renderHoldings(rows, totalInvested, totalValue, totalPnl);
-  renderSnapshotChart();
+  renderSnapshotChart(rows);
   renderDonut(rows);
   renderTransactions();
 
@@ -375,6 +438,268 @@ function upsertLocalSnapshot(snapshot) {
   );
 }
 
+// ---------- 歷史市值回填 ----------
+const BENCH_SYMBOL = '0050.TW';
+let histDisplayRange = localStorage.getItem('hist-range') || '3mo';
+let benchmarkOn = localStorage.getItem('benchmark-on') === '1';
+const HIST_DISPLAY_DAYS = { '1mo': 31, '3mo': 93, '6mo': 186, '1y': 372, all: Infinity };
+
+async function loadHistory() {
+  const held = state.stocks.filter((s) => state.transactions.some((t) => t.stockId === s.id));
+  if (!held.length) {
+    state.history = null;
+    return;
+  }
+  const firstTx = state.transactions.reduce((min, t) => (t.date < min ? t.date : min), '9999');
+  const days = (Date.now() - new Date(firstTx).getTime()) / 86400_000;
+  const range =
+    days <= 25 ? '1mo' : days <= 85 ? '3mo' : days <= 175 ? '6mo' : days <= 360 ? '1y' : days <= 720 ? '2y' : days <= 1800 ? '5y' : 'max';
+  const fxSyms = [...new Set(held.map((s) => fxSymbolOf(s.currency)).filter(Boolean))];
+  const symbols = [...new Set([...held.map((s) => s.symbol), ...fxSyms, BENCH_SYMBOL])];
+  state.historyLoading = true;
+  try {
+    const res = await fetch(`/api/history?range=${range}&symbols=${encodeURIComponent(symbols.join(','))}`);
+    if (!res.ok) throw new Error();
+    state.history = await res.json();
+  } catch {
+    state.history = null; // 圖表退回快照資料
+  } finally {
+    state.historyLoading = false;
+  }
+  render();
+}
+
+// 由交易紀錄＋歷史收盤價逐日重放，回推每天的市值、持有成本、當日損益與 0050 對比線
+function computeDailySeries() {
+  const hist = state.history;
+  if (!hist || !Object.keys(hist.series || {}).length) return null;
+  const held = state.stocks.filter((s) => state.transactions.some((t) => t.stockId === s.id));
+  if (!held.length) return null;
+
+  const toDate = (ms) => new Date(ms).toISOString().slice(0, 10);
+  const ff = {}; // symbol -> forward-fill 查詢（回傳 ≤ 該日的最後收盤）
+  for (const [sym, points] of Object.entries(hist.series)) {
+    const ent = points.map(([t, c]) => [toDate(t), c]);
+    ff[sym] = (date) => {
+      let lo = 0;
+      let hi = ent.length - 1;
+      let ans = null;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (ent[mid][0] <= date) {
+          ans = ent[mid][1];
+          lo = mid + 1;
+        } else hi = mid - 1;
+      }
+      return ans;
+    };
+  }
+
+  const txs = [...state.transactions].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  if (!txs.length) return null;
+  const firstTxDate = txs[0].date;
+
+  const dateSet = new Set();
+  for (const s of held) for (const [t] of hist.series[s.symbol] || []) dateSet.add(toDate(t));
+  const dates = [...dateSet].sort().filter((d) => d >= firstTxDate);
+  if (!dates.length) return null;
+
+  const stockOf = Object.fromEntries(held.map((s) => [s.id, s]));
+  const bySt = Object.fromEntries(held.map((s) => [s.id, { shares: 0, costTWD: 0 }]));
+  const benchFF = ff[BENCH_SYMBOL];
+  let benchUnits = 0;
+  let benchOk = !!benchFF;
+  let ti = 0;
+  const out = [];
+
+  const consumeTx = (t, date) => {
+    // 回傳 { flow, dividend }（台幣；flow 買為正、賣為負）
+    const stock = stockOf[t.stockId];
+    if (!stock) return { flow: 0, dividend: 0 };
+    const fxSym = fxSymbolOf(stock.currency);
+    const fxT = fxSym ? ff[fxSym]?.(t.date) ?? ff[fxSym]?.(date) : 1;
+    if (t.kind === 'dividend') {
+      const amt = t.twdCost != null ? Number(t.twdCost) || 0 : (Number(t.amount) || 0) * (fxT ?? 0);
+      return { flow: 0, dividend: amt };
+    }
+    const s = Number(t.shares) || 0;
+    const price = Number(t.price) || 0;
+    const flowT = t.twdCost != null ? Math.abs(Number(t.twdCost)) : Math.abs(s) * price * (fxT ?? 0);
+    const st = bySt[t.stockId];
+    let flow = 0;
+    if (s > 0) {
+      st.costTWD += flowT;
+      st.shares += s;
+      flow = flowT;
+    } else if (s < 0) {
+      const sell = -s;
+      const removed = Math.min(sell, Math.max(st.shares, 0));
+      const avg = st.shares > 0 ? st.costTWD / st.shares : 0;
+      st.costTWD -= avg * removed;
+      st.shares -= sell;
+      flow = -flowT;
+    }
+    // 0050 對比：同日以同額買入/賣出 0050
+    if (benchOk && flow !== 0) {
+      const c = benchFF(t.date);
+      if (c == null) benchOk = false;
+      else benchUnits = Math.max(0, benchUnits + flow / c);
+    }
+    return { flow, dividend: 0 };
+  };
+
+  for (const date of dates) {
+    let flow = 0;
+    let dividendToday = 0;
+    while (ti < txs.length && txs[ti].date <= date) {
+      const t = txs[ti++];
+      const r = consumeTx(t, date);
+      flow += r.flow;
+      if (t.date === date) dividendToday += r.dividend;
+    }
+    let value = 0;
+    let ok = true;
+    for (const s of held) {
+      const st = bySt[s.id];
+      if (!st.shares) continue;
+      const c = ff[s.symbol]?.(date);
+      const fxSym = fxSymbolOf(s.currency);
+      const fxD = fxSym ? ff[fxSym]?.(date) : 1;
+      if (c == null || fxD == null) {
+        ok = false;
+        break;
+      }
+      value += st.shares * c * fxD;
+    }
+    if (!ok) continue;
+    const invested = held.reduce((sum, s) => sum + bySt[s.id].costTWD, 0);
+    const benchClose = benchOk ? benchFF(date) : null;
+    out.push({
+      date,
+      value,
+      invested,
+      flow,
+      dividendToday,
+      bench: benchOk && benchClose != null ? benchUnits * benchClose : null,
+    });
+  }
+
+  // 補上今日即時點（歷史序列還沒有今天、但目前報價可用時）
+  const todayStr = todayTaipei();
+  if (out.length && out[out.length - 1].date < todayStr && Object.keys(state.quotes).length) {
+    const rows = state.stocks.map(computeStock);
+    const anyMissing = rows.some((r) => r.valueTWD == null);
+    if (!anyMissing) {
+      let flow = 0;
+      let dividendToday = 0;
+      while (ti < txs.length) {
+        const t = txs[ti++];
+        const r = consumeTx(t, todayStr);
+        flow += r.flow;
+        if (t.date === todayStr) dividendToday += r.dividend;
+      }
+      const benchQuote = state.quotes[BENCH_SYMBOL]?.price ?? (benchOk ? benchFF(todayStr) : null);
+      out.push({
+        date: todayStr,
+        value: rows.reduce((s, r) => s + r.valueTWD, 0),
+        invested: rows.reduce((s, r) => s + (r.invested ?? 0), 0),
+        flow,
+        dividendToday,
+        bench: benchOk && benchQuote != null ? benchUnits * benchQuote : null,
+      });
+    }
+  }
+
+  // 當日損益＝市值變化 − 當日淨投入 ＋ 當日配息（入金不會被誤算成獲利）
+  for (let i = 0; i < out.length; i++) {
+    if (i === 0) {
+      out[i].dPnl = null;
+      out[i].dPct = null;
+    } else {
+      out[i].dPnl = out[i].value - out[i - 1].value - out[i].flow + out[i].dividendToday;
+      out[i].dPct = out[i - 1].value > 0 ? out[i].dPnl / out[i - 1].value : null;
+    }
+  }
+  return out;
+}
+
+// XIRR 年化報酬率：買入為負現金流、賣出/配息為正、期末市值為正，二分法解 NPV=0
+function computeXirr(rows) {
+  if (!rows.length || rows.some((r) => r.valueTWD == null)) return null;
+  const totalValue = rows.reduce((s, r) => s + r.valueTWD, 0);
+  const flows = [];
+  for (const t of state.transactions) {
+    const stock = state.stocks.find((s) => s.id === t.stockId);
+    if (!stock) continue;
+    const fx = fxRate(stock.currency);
+    if (t.kind === 'dividend') {
+      const amt = t.twdCost != null ? Number(t.twdCost) || 0 : fx != null ? (Number(t.amount) || 0) * fx : null;
+      if (amt == null) return null;
+      flows.push([t.date, amt]);
+      continue;
+    }
+    const s = Number(t.shares) || 0;
+    const amt = t.twdCost != null ? Math.abs(Number(t.twdCost)) : fx != null ? Math.abs(s) * (Number(t.price) || 0) * fx : null;
+    if (amt == null) return null;
+    flows.push([t.date, s > 0 ? -amt : amt]);
+  }
+  if (!flows.length) return null;
+  flows.push([todayTaipei(), totalValue]);
+  flows.sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+
+  const t0 = new Date(flows[0][0]).getTime();
+  const spanDays = (new Date(flows[flows.length - 1][0]).getTime() - t0) / 86400_000;
+  if (spanDays < 30) return null; // 期間太短，年化沒有意義
+  if (!flows.some(([, a]) => a < 0) || !flows.some(([, a]) => a > 0)) return null;
+
+  const npv = (r) =>
+    flows.reduce((sum, [d, a]) => sum + a / Math.pow(1 + r, (new Date(d).getTime() - t0) / 86400_000 / 365), 0);
+  let lo = -0.95;
+  let hi = 10;
+  let fLo = npv(lo);
+  if (fLo * npv(hi) > 0) return null;
+  for (let i = 0; i < 100; i++) {
+    const mid = (lo + hi) / 2;
+    if (fLo * npv(mid) <= 0) hi = mid;
+    else {
+      lo = mid;
+      fLo = npv(lo);
+    }
+  }
+  return (lo + hi) / 2;
+}
+
+// 圖表資料來源：優先用歷史回推，抓不到歷史價時退回每日快照
+function getChartSeries() {
+  const computed = computeDailySeries();
+  if (computed && computed.length) {
+    return {
+      source: 'history',
+      points: computed.map((p) => ({
+        date: p.date,
+        totalValue: p.value,
+        totalInvested: p.invested,
+        pnl: p.value - p.invested,
+        bench: p.bench,
+      })),
+      daily: computed.map((p) => (p.dPnl == null ? null : { dPnl: p.dPnl, dPct: p.dPct })),
+    };
+  }
+  const snaps = state.snapshots
+    .filter((s) => s.totalValue != null)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  if (!snaps.length) return null;
+  return {
+    source: 'snapshots',
+    points: snaps.map((s) => ({ date: s.date, totalValue: s.totalValue, totalInvested: s.totalInvested ?? null, pnl: s.pnl ?? null, bench: null })),
+    daily: snaps.map((s, i) => {
+      if (i === 0 || s.pnl == null || snaps[i - 1].pnl == null) return null;
+      const dPnl = s.pnl - snaps[i - 1].pnl;
+      return { dPnl, dPct: snaps[i - 1].totalValue > 0 ? dPnl / snaps[i - 1].totalValue : null };
+    }),
+  };
+}
+
 // 金額縮寫（軸標籤用）：1.2億、350萬、8,000
 function fmtCompactTWD(v) {
   const abs = Math.abs(v);
@@ -396,28 +721,43 @@ function niceTicks(lo, hi, count = 4) {
   return ticks;
 }
 
-function renderSnapshotChart() {
+function renderSnapshotChart(rowsForXirr) {
   const el = $('snapshot-chart');
-  const snapshots = state.snapshots
-    .filter((s) => s.totalValue != null)
-    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const data = getChartSeries();
 
-  $('snapshot-subtitle').textContent = snapshots.length
-    ? `已記錄 ${snapshots.length} 天；每天 14:00 自動更新，也可手動補記今日市值。`
-    : '每天 14:00 自動記錄；也可手動補記今日市值。';
+  document.querySelectorAll('#hist-range-control button').forEach((b) => {
+    b.classList.toggle('active', b.dataset.range === histDisplayRange);
+  });
+  const benchToggle = $('bench-toggle');
+  if (benchToggle) benchToggle.checked = benchmarkOn;
 
-  if (!snapshots.length) {
-    el.innerHTML = '<div class="snapshot-empty">尚未有每日市值紀錄，按「記錄今日市值」建立第一筆。</div>';
+  if (!data || !data.points.length) {
+    $('snapshot-subtitle').textContent = state.historyLoading
+      ? '載入歷史價格中…'
+      : '新增交易後會依歷史收盤價自動回推市值曲線。';
+    el.innerHTML = '<div class="snapshot-empty">尚無資料 — 記錄第一筆交易後，這裡會顯示完整的市值與每日損益走勢。</div>';
     return;
   }
+  $('snapshot-subtitle').textContent =
+    data.source === 'history'
+      ? '依交易紀錄與歷史收盤價回推，最後一點為即時報價；14:00 快照為備援。'
+      : `歷史價格暫不可用，改顯示每日快照（已記錄 ${data.points.length} 天）。`;
 
-  // 每日損益＝「累計損益」的前後差，而不是市值差 — 加碼入金的當天不會被誤算成獲利
-  const daily = snapshots.map((s, i) => {
-    if (i === 0 || s.pnl == null || snapshots[i - 1].pnl == null) return null;
-    const dPnl = s.pnl - snapshots[i - 1].pnl;
-    const base = snapshots[i - 1].totalValue;
-    return { dPnl, dPct: base > 0 ? dPnl / base : null };
-  });
+  // 顯示範圍（資料一次抓全期，切範圍不用重新請求）
+  const cutoffDays = HIST_DISPLAY_DAYS[histDisplayRange] ?? 93;
+  let snapshots = data.points;
+  let daily = data.daily;
+  if (cutoffDays !== Infinity) {
+    const cutoff = new Date(Date.now() - cutoffDays * 86400_000).toISOString().slice(0, 10);
+    const startIdx = snapshots.findIndex((p) => p.date >= cutoff);
+    if (startIdx > 0) {
+      snapshots = snapshots.slice(startIdx);
+      daily = daily.slice(startIdx);
+    }
+  }
+
+  const showBench = benchmarkOn && data.source === 'history' && snapshots.some((p) => p.bench != null);
+  const xirr = computeXirr(rowsForXirr || []);
 
   // ---- 版面：上下兩個共用時間軸的面板 ----
   const width = 860;
@@ -436,6 +776,7 @@ function renderSnapshotChart() {
   for (const s of snapshots) {
     series.push(s.totalValue);
     if (s.totalInvested != null) series.push(s.totalInvested);
+    if (showBench && s.bench != null) series.push(s.bench);
   }
   let vLo = Math.min(...series);
   let vHi = Math.max(...series);
@@ -464,6 +805,13 @@ function renderSnapshotChart() {
     .filter(Boolean)
     .map((p, i) => (i ? 'L ' : 'M ') + p)
     .join(' ');
+  const benchPath = !showBench
+    ? ''
+    : snapshots
+        .map((s, i) => (s.bench == null ? null : `${xOf(i).toFixed(1)} ${yVal(s.bench).toFixed(1)}`))
+        .filter(Boolean)
+        .map((p, i) => (i ? 'L ' : 'M ') + p)
+        .join(' ');
 
   const barW = Math.max(3, Math.min(16, (plotW / Math.max(n, 2)) * 0.55));
   const bars = daily
@@ -512,6 +860,9 @@ function renderSnapshotChart() {
       <span class="${pnlClass(lastDaily?.dPnl ?? 0)}">當日損益 <strong>${
         lastDaily ? `${signed(lastDaily.dPnl, (n) => fmtTWD(n))}${lastDaily.dPct != null ? `（${signed(lastDaily.dPct, (v) => fmtPct(v, 2))}）` : ''}` : '至少需 2 筆'
       }</strong></span>
+      <span class="${pnlClass(xirr ?? 0)}" title="以每筆現金流計算的年化報酬率（XIRR），需至少 30 天">年化報酬率 <strong>${
+        xirr != null ? signed(xirr, (v) => fmtPct(v, 1)) : '—'
+      }</strong></span>
     </div>
     <div class="snapshot-plot">
       <svg viewBox="0 0 ${width} ${height}" class="snapshot-svg" id="snapshot-svg" role="img" aria-label="市值曲線與每日損益直方圖">
@@ -520,6 +871,7 @@ function renderSnapshotChart() {
         ${vGrid}
         ${areaPath ? `<path d="${areaPath}" class="value-area"></path>` : ''}
         ${investedPath ? `<path d="${investedPath}" class="invested-line"></path>` : ''}
+        ${benchPath ? `<path d="${benchPath}" class="bench-line"></path>` : ''}
         <path d="${valuePath}" class="value-line"></path>
         ${n === 1 ? `<circle class="snapshot-point" cx="${xOf(0).toFixed(1)}" cy="${yVal(latest.totalValue).toFixed(1)}" r="4"></circle>` : ''}
         ${pGrid}
@@ -534,11 +886,12 @@ function renderSnapshotChart() {
     <div class="snapshot-legend">
       <span><i class="legend-line value"></i>總市值</span>
       ${investedPath ? '<span><i class="legend-line invested"></i>投入成本</span>' : ''}
+      ${benchPath ? '<span><i class="legend-line bench"></i>同額投入 0050</span>' : ''}
       <span><i class="legend-bar up"></i>單日獲利</span>
       <span><i class="legend-bar down"></i>單日虧損</span>
     </div>`;
 
-  bindSnapshotHover(snapshots, daily, { xOf, yVal, padL, plotW, viewW: width });
+  bindSnapshotHover(snapshots, daily, { xOf, yVal, padL, plotW, viewW: width, showBench });
 }
 
 function bindSnapshotHover(snapshots, daily, geo) {
@@ -571,6 +924,7 @@ function bindSnapshotHover(snapshots, daily, geo) {
       <strong>${esc(s.date)}</strong><br>
       市值 ${fmtTWD(s.totalValue)}<br>
       ${s.totalInvested != null ? `投入 ${fmtTWD(s.totalInvested)}<br>` : ''}
+      ${geo.showBench && s.bench != null ? `0050 對比 ${fmtTWD(s.bench)}<br>` : ''}
       <span class="${pnlClass(d?.dPnl ?? 0)}">當日損益 ${
         d ? `${signed(d.dPnl, (v) => fmtTWD(v))}${d.dPct != null ? `（${signed(d.dPct, (v) => fmtPct(v, 2))}）` : ''}` : '—'
       }</span><br>
@@ -623,7 +977,12 @@ function renderHoldings(rows, totalInvested, totalValue, totalPnl) {
         r.pnl != null && r.invested > 0
           ? `<span class="cell-sub ${pnlClass(r.pnl)}">${signed(r.pnl / r.invested, fmtPct)}</span>`
           : ''
-      }</td>`;
+      }${(() => {
+        const realizedTotal = (r.realized ?? 0) + (r.dividends ?? 0);
+        return realizedTotal !== 0
+          ? `<span class="cell-sub ${pnlClass(realizedTotal)}">已實現 ${signed(realizedTotal, (n) => fmtTWD(n))}</span>`
+          : '';
+      })()}</td>`;
     body.appendChild(tr);
   }
 
@@ -839,17 +1198,172 @@ function renderTransactions() {
   const sorted = [...state.transactions].sort((a, b) => (a.date < b.date ? 1 : -1));
   for (const t of sorted) {
     const stock = state.stocks.find((s) => s.id === t.stockId);
+    const isDiv = t.kind === 'dividend';
+    const kindChip = isDiv
+      ? '<span class="chip chip-kind div">息</span>'
+      : t.shares < 0
+        ? '<span class="chip chip-kind sell">賣</span>'
+        : '<span class="chip chip-kind buy">買</span>';
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${esc(t.date)}</td>
-      <td>${esc(stock ? stock.name : t.stockId)}</td>
-      <td class="num ${t.shares < 0 ? 'down' : ''}">${fmtNum(t.shares, 4)}</td>
-      <td class="num">${fmtNum(t.price, 4)} ${stock ? esc(stock.currency) : ''}</td>
+      <td>${esc(stock ? stock.name : t.stockId)} ${kindChip}</td>
+      <td class="num ${!isDiv && t.shares < 0 ? 'down' : ''}">${isDiv ? '—' : fmtNum(t.shares, 4)}</td>
+      <td class="num">${isDiv ? fmtNum(t.amount, 2) : fmtNum(t.price, 4)} ${stock ? esc(stock.currency) : ''}</td>
       <td class="num">${t.twdCost != null ? fmtTWD(t.twdCost) : '（依匯率）'}</td>
-      <td><button class="tx-del" data-id="${esc(t.id)}" title="刪除">✕</button></td>`;
+      <td class="tx-actions">
+        <button class="tx-edit" data-id="${esc(t.id)}" title="編輯">✎</button>
+        <button class="tx-del" data-id="${esc(t.id)}" title="刪除">✕</button>
+      </td>`;
     body.appendChild(tr);
   }
   $('tx-empty').hidden = sorted.length > 0;
+}
+
+// ---------- 交易表單（新增／編輯）----------
+let editingTxId = null;
+
+function updateTxKindUI() {
+  const isDiv = $('tx-kind').value === 'dividend';
+  $('tx-shares-label').hidden = isDiv;
+  $('tx-price-label').hidden = isDiv;
+  $('tx-amount-label').hidden = !isDiv;
+  $('tx-shares').required = !isDiv;
+  $('tx-price').required = !isDiv;
+  $('tx-twd-caption').textContent = isDiv ? '台幣入帳金額（選填）' : '台幣總成本（選填）';
+}
+
+function resetTxForm() {
+  editingTxId = null;
+  $('tx-shares').value = '';
+  $('tx-price').value = '';
+  $('tx-amount').value = '';
+  $('tx-twd').value = '';
+  $('tx-submit').textContent = '新增交易';
+  $('tx-cancel-edit').hidden = true;
+  $('tx-form-title').textContent = '新增交易';
+}
+
+function startEditTx(id) {
+  const t = state.transactions.find((x) => x.id === id);
+  if (!t) return;
+  editingTxId = id;
+  $('tx-kind').value = t.kind === 'dividend' ? 'dividend' : 'trade';
+  updateTxKindUI();
+  $('tx-stock').value = t.stockId;
+  $('tx-date').value = t.date;
+  $('tx-shares').value = t.kind === 'dividend' ? '' : t.shares;
+  $('tx-price').value = t.kind === 'dividend' ? '' : t.price;
+  $('tx-amount').value = t.kind === 'dividend' ? (t.amount ?? '') : '';
+  $('tx-twd').value = t.twdCost ?? '';
+  $('tx-submit').textContent = '更新交易';
+  $('tx-cancel-edit').hidden = false;
+  $('tx-form-title').textContent = '編輯交易';
+  $('tx-form').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// ---------- CSV 匯入 ----------
+// 支援引號包裹的欄位；欄位順序 date, stock, shares, price, twd, kind（可有標題列）
+function parseCsvLine(line) {
+  const cells = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+      else if (ch === '"') inQuotes = false;
+      else cur += ch;
+    } else if (ch === '"') inQuotes = true;
+    else if (ch === ',') { cells.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  cells.push(cur);
+  return cells.map((c) => c.trim());
+}
+
+const CSV_HEADERS = {
+  date: ['date', '日期'],
+  stock: ['stock', 'symbol', 'ticker', '標的', '代號', '股票'],
+  shares: ['shares', 'qty', '股數'],
+  price: ['price', '價格', '每股價格', '成交價'],
+  twd: ['twd', 'twdcost', '台幣', '台幣成本', '台幣總成本'],
+  kind: ['kind', 'type', '類型'],
+};
+
+function findStockByText(text) {
+  const q = String(text).trim().toLowerCase();
+  return state.stocks.find(
+    (s) =>
+      s.id.toLowerCase() === q ||
+      s.symbol.toLowerCase() === q ||
+      tickerOf(s.symbol).toLowerCase() === q ||
+      s.name.toLowerCase() === q
+  );
+}
+
+async function importCsv(text) {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim() !== '');
+  if (!lines.length) throw new Error('CSV 是空的');
+
+  let rows = lines.map(parseCsvLine);
+  // 有標題列 → 依標題對應欄位；否則用預設順序
+  let col = { date: 0, stock: 1, shares: 2, price: 3, twd: 4, kind: 5 };
+  const first = rows[0].map((c) => c.toLowerCase());
+  const hasHeader = Object.values(CSV_HEADERS).some((names) => names.some((n) => first.includes(n)));
+  if (hasHeader) {
+    for (const [key, names] of Object.entries(CSV_HEADERS)) {
+      const idx = first.findIndex((c) => names.includes(c));
+      if (idx >= 0) col[key] = idx;
+    }
+    rows = rows.slice(1);
+  }
+
+  const imported = [];
+  const failed = [];
+  for (const [i, cells] of rows.entries()) {
+    const rowNo = i + 1 + (hasHeader ? 1 : 0);
+    const dateRaw = (cells[col.date] || '').replace(/\//g, '-');
+    const stock = findStockByText(cells[col.stock] || '');
+    const kindRaw = (cells[col.kind] || '').toLowerCase();
+    const isDiv = ['dividend', 'div', '息', '配息', '股利'].includes(kindRaw);
+    const priceVal = parseDecimalInput(cells[col.price]);
+    const sharesVal = parseDecimalInput(cells[col.shares]);
+    const twdRaw = cells[col.twd] || '';
+    const twdCost = twdRaw === '' ? null : Math.abs(parseDecimalInput(twdRaw)) || null;
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateRaw) || !stock) {
+      failed.push(`第 ${rowNo} 列（${cells.join(',').slice(0, 40)}）`);
+      continue;
+    }
+    if (isDiv) {
+      if ((Number.isNaN(priceVal) || priceVal <= 0) && twdCost == null) {
+        failed.push(`第 ${rowNo} 列（配息缺金額）`);
+        continue;
+      }
+      imported.push({ kind: 'dividend', stockId: stock.id, date: dateRaw, amount: Number.isNaN(priceVal) ? 0 : priceVal, twdCost });
+    } else {
+      if (!sharesVal || Number.isNaN(priceVal)) {
+        failed.push(`第 ${rowNo} 列（股數或價格無效）`);
+        continue;
+      }
+      imported.push({ stockId: stock.id, date: dateRaw, shares: sharesVal, price: priceVal, twdCost });
+    }
+  }
+
+  if (!imported.length) throw new Error('沒有可匯入的資料列。' + (failed.length ? `\n無法解析：\n${failed.join('\n')}` : ''));
+  const msg =
+    `將匯入 ${imported.length} 筆交易` +
+    (failed.length ? `，另有 ${failed.length} 列無法解析將略過：\n${failed.slice(0, 5).join('\n')}${failed.length > 5 ? '\n…' : ''}` : '') +
+    '\n確定嗎？';
+  if (!confirm(msg)) return;
+
+  for (const rec of imported) {
+    state.transactions.push({ ...rec, id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6) });
+  }
+  await savePortfolio();
+  render();
+  loadHistory();
 }
 
 function rebuildStockSelect() {
@@ -1062,6 +1576,7 @@ function saveEditor() {
   closeEditor();
   render();
   loadQuotes().then(render); // 新標的需要抓報價
+  loadHistory();
 }
 
 function initEditor() {
@@ -1110,34 +1625,71 @@ function initForm() {
   rebuildStockSelect();
   $('tx-date').value = new Date().toISOString().slice(0, 10);
 
+  $('tx-kind').addEventListener('change', updateTxKindUI);
+
   $('tx-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const shares = parseDecimalInput($('tx-shares').value);
-    const price = parseDecimalInput($('tx-price').value);
-    if (!shares || Number.isNaN(price)) return;
+    const kind = $('tx-kind').value;
     const twdRaw = $('tx-twd').value.trim();
-    state.transactions.push({
-      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-      stockId: $('tx-stock').value,
-      date: $('tx-date').value,
-      shares,
-      price,
-      twdCost: twdRaw === '' ? null : Math.abs(parseDecimalInput(twdRaw)),
-    });
+    const twdCost = twdRaw === '' ? null : Math.abs(parseDecimalInput(twdRaw));
+    const base = { stockId: $('tx-stock').value, date: $('tx-date').value };
+
+    let record;
+    if (kind === 'dividend') {
+      const amount = parseDecimalInput($('tx-amount').value);
+      if ((Number.isNaN(amount) || amount <= 0) && twdCost == null) {
+        alert('請填配息金額（原幣）或台幣入帳金額');
+        return;
+      }
+      record = { ...base, kind: 'dividend', amount: Number.isNaN(amount) ? 0 : amount, twdCost };
+    } else {
+      const shares = parseDecimalInput($('tx-shares').value);
+      const price = parseDecimalInput($('tx-price').value);
+      if (!shares || Number.isNaN(price)) return;
+      record = { ...base, shares, price, twdCost };
+    }
+
+    if (editingTxId) {
+      const idx = state.transactions.findIndex((t) => t.id === editingTxId);
+      if (idx >= 0) state.transactions[idx] = { ...record, id: editingTxId };
+    } else {
+      state.transactions.push({ ...record, id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6) });
+    }
     await savePortfolio();
-    $('tx-shares').value = '';
-    $('tx-price').value = '';
-    $('tx-twd').value = '';
+    resetTxForm();
     render();
+    loadHistory(); // 交易變動可能引入新標的或改變回推結果
   });
 
+  $('tx-cancel-edit').addEventListener('click', resetTxForm);
+
   $('tx-body').addEventListener('click', async (e) => {
+    const editBtn = e.target.closest('.tx-edit');
+    if (editBtn) {
+      startEditTx(editBtn.dataset.id);
+      return;
+    }
     const btn = e.target.closest('.tx-del');
     if (!btn) return;
     if (!confirm('確定要刪除這筆交易嗎？')) return;
     state.transactions = state.transactions.filter((t) => t.id !== btn.dataset.id);
+    if (editingTxId && !state.transactions.some((t) => t.id === editingTxId)) resetTxForm();
     await savePortfolio();
     render();
+    loadHistory();
+  });
+
+  $('csv-btn').addEventListener('click', () => $('csv-file').click());
+  $('csv-file').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      await importCsv(await file.text());
+    } catch (err) {
+      alert(err.message || 'CSV 解析失敗');
+    } finally {
+      e.target.value = '';
+    }
   });
 
   $('refresh-btn').addEventListener('click', async () => {
@@ -1166,6 +1718,7 @@ function initForm() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || '記錄失敗');
         upsertLocalSnapshot(data.snapshot);
+        if (data.rev !== undefined) state.rev = Number(data.rev) || state.rev; // 伺服器已寫入，同步版本號
         localStorage.setItem(backupKey(), JSON.stringify({
           budget: state.budget,
           stocks: state.stocks,
@@ -1187,6 +1740,20 @@ function initForm() {
     if (!btn) return;
     chartBasis = btn.dataset.basis;
     basisLocked = true;
+    render();
+  });
+
+  $('hist-range-control').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-range]');
+    if (!btn) return;
+    histDisplayRange = btn.dataset.range;
+    localStorage.setItem('hist-range', histDisplayRange);
+    render();
+  });
+
+  $('bench-toggle').addEventListener('change', (e) => {
+    benchmarkOn = e.target.checked;
+    localStorage.setItem('benchmark-on', benchmarkOn ? '1' : '0');
     render();
   });
 
@@ -1219,6 +1786,7 @@ function initForm() {
       const data = JSON.parse(await file.text());
       if (!Array.isArray(data.transactions)) throw new Error();
       if (!confirm(`將以備份檔（${data.transactions.length} 筆交易）覆蓋目前紀錄，確定嗎？`)) return;
+      delete data.rev; // 備份檔的版本號不適用於目前帳號
       applyDoc(data);
       await savePortfolio({ includeSnapshots: true });
       rebuildStockSelect();
@@ -1303,6 +1871,7 @@ async function enterApp() {
   // 開頁時載入一次現價，之後由「↻ 更新報價」按鈕手動更新
   await loadQuotes();
   render();
+  loadHistory(); // 歷史價格較大，背景載入，完成後自動重畫圖表
 }
 
 // ---------- 啟動 ----------
