@@ -375,15 +375,31 @@ function upsertLocalSnapshot(snapshot) {
   );
 }
 
-function scaleValue(n, min, max, lo, hi) {
-  if (max === min) return (lo + hi) / 2;
-  return hi - ((n - min) / (max - min)) * (hi - lo);
+// 金額縮寫（軸標籤用）：1.2億、350萬、8,000
+function fmtCompactTWD(v) {
+  const abs = Math.abs(v);
+  const sign = v < 0 ? '-' : '';
+  if (abs >= 1e8) return sign + (abs / 1e8).toFixed(abs >= 1e9 || abs % 1e8 === 0 ? 0 : 1) + '億';
+  if (abs >= 1e4) return sign + Math.round(abs / 1e4).toLocaleString('zh-TW') + '萬';
+  return sign + Math.round(abs).toLocaleString('zh-TW');
+}
+
+// 在 [lo, hi] 之間取「好看」的刻度（1/2/5 × 10^n）
+function niceTicks(lo, hi, count = 4) {
+  const span = hi - lo || Math.abs(hi) || 1;
+  const step0 = span / count;
+  const mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const norm = step0 / mag;
+  const step = (norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10) * mag;
+  const ticks = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-6; v += step) ticks.push(v);
+  return ticks;
 }
 
 function renderSnapshotChart() {
   const el = $('snapshot-chart');
   const snapshots = state.snapshots
-    .filter((s) => s.totalValue != null && s.pnlPct != null)
+    .filter((s) => s.totalValue != null)
     .sort((a, b) => String(a.date).localeCompare(String(b.date)));
 
   $('snapshot-subtitle').textContent = snapshots.length
@@ -395,77 +411,184 @@ function renderSnapshotChart() {
     return;
   }
 
-  const width = 760;
-  const height = 280;
-  const pad = { l: 84, r: 76, t: 24, b: 42 };
-  const plotW = width - pad.l - pad.r;
-  const plotH = height - pad.t - pad.b;
-  const values = snapshots.map((s) => s.totalValue);
-  const dailyPcts = snapshots
-    .map((s, i) =>
-      i > 0 && snapshots[i - 1].totalValue > 0 ? { snapshot: s, index: i, pct: s.totalValue / snapshots[i - 1].totalValue - 1 } : null
-    )
-    .filter(Boolean);
-  const vMin = 0;
-  const vMax = Math.max(1, ...values);
-  const pMaxAbs = Math.max(0.01, ...dailyPcts.map((p) => Math.abs(p.pct)));
-  const xOf = (i) => pad.l + (snapshots.length === 1 ? plotW / 2 : (i / (snapshots.length - 1)) * plotW);
-  const yVal = (v) => scaleValue(v, vMin, vMax, pad.t, pad.t + plotH);
-  const yPct = (p) => scaleValue(p, -pMaxAbs, pMaxAbs, pad.t, pad.t + plotH);
-  const linePath = (points) => points.map((p, i) => `${i ? 'L' : 'M'} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ');
-  const valuePath = linePath(snapshots.map((s, i) => [xOf(i), yVal(s.totalValue)]));
-  const zeroY = yPct(0);
-  const firstDate = snapshots[0].date.slice(5);
-  const lastDate = snapshots[snapshots.length - 1].date.slice(5);
-  const latest = snapshots[snapshots.length - 1];
-  const points = snapshots
+  // 每日損益＝「累計損益」的前後差，而不是市值差 — 加碼入金的當天不會被誤算成獲利
+  const daily = snapshots.map((s, i) => {
+    if (i === 0 || s.pnl == null || snapshots[i - 1].pnl == null) return null;
+    const dPnl = s.pnl - snapshots[i - 1].pnl;
+    const base = snapshots[i - 1].totalValue;
+    return { dPnl, dPct: base > 0 ? dPnl / base : null };
+  });
+
+  // ---- 版面：上下兩個共用時間軸的面板 ----
+  const width = 860;
+  const height = 408;
+  const padL = 60;
+  const padR = 14;
+  const top = { y0: 30, y1: 236 }; // 市值面板
+  const bot = { y0: 274, y1: 362 }; // 每日損益面板
+  const xAxisY = 388;
+  const plotW = width - padL - padR;
+  const n = snapshots.length;
+  const xOf = (i) => padL + (n === 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+
+  // 市值與投入成本同單位，共用左軸；範圍貼齊資料（不強制從 0 起算，變化才看得清楚）
+  const series = [];
+  for (const s of snapshots) {
+    series.push(s.totalValue);
+    if (s.totalInvested != null) series.push(s.totalInvested);
+  }
+  let vLo = Math.min(...series);
+  let vHi = Math.max(...series);
+  const vPad = (vHi - vLo || vHi || 1) * 0.08;
+  vLo = Math.max(0, vLo - vPad);
+  vHi += vPad;
+  const yVal = (v) => top.y1 - ((v - vLo) / (vHi - vLo || 1)) * (top.y1 - top.y0);
+  const vTicks = niceTicks(vLo, vHi, 4);
+
+  // 每日損益面板：0 基線置中、上下對稱
+  const pnlAbs = Math.max(1, ...daily.filter(Boolean).map((d) => Math.abs(d.dPnl)));
+  const pLim = pnlAbs * 1.12;
+  const yPnl = (v) => {
+    const mid = (bot.y0 + bot.y1) / 2;
+    return mid - (v / pLim) * ((bot.y1 - bot.y0) / 2);
+  };
+  const zeroY = yPnl(0);
+
+  const valuePath = snapshots
+    .map((s, i) => `${i ? 'L' : 'M'} ${xOf(i).toFixed(1)} ${yVal(s.totalValue).toFixed(1)}`)
+    .join(' ');
+  const areaPath =
+    n > 1 ? `${valuePath} L ${xOf(n - 1).toFixed(1)} ${top.y1} L ${xOf(0).toFixed(1)} ${top.y1} Z` : '';
+  const investedPath = snapshots
+    .map((s, i) => (s.totalInvested == null ? null : `${xOf(i).toFixed(1)} ${yVal(s.totalInvested).toFixed(1)}`))
+    .filter(Boolean)
+    .map((p, i) => (i ? 'L ' : 'M ') + p)
+    .join(' ');
+
+  const barW = Math.max(3, Math.min(16, (plotW / Math.max(n, 2)) * 0.55));
+  const bars = daily
+    .map((d, i) => {
+      if (!d) return '';
+      const y = yPnl(d.dPnl);
+      const h = Math.max(1.5, Math.abs(y - zeroY));
+      const topY = d.dPnl >= 0 ? y : zeroY;
+      return `<rect class="pnl-bar ${d.dPnl >= 0 ? 'up' : 'down'}" x="${(xOf(i) - barW / 2).toFixed(1)}" y="${topY.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" rx="1.5"></rect>`;
+    })
+    .join('');
+
+  const vGrid = vTicks
     .map(
-      (s, i) =>
-        `<circle class="snapshot-point" cx="${xOf(i).toFixed(1)}" cy="${yVal(s.totalValue).toFixed(1)}" r="3">
-          <title>${esc(s.date)}\n市值 ${fmtTWD(s.totalValue)}\n損益 ${fmtTWD(s.pnl)}（${signed(s.pnlPct, fmtPct)}）</title>
-        </circle>`
+      (t) =>
+        `<line x1="${padL}" y1="${yVal(t).toFixed(1)}" x2="${padL + plotW}" y2="${yVal(t).toFixed(1)}" class="grid-line"></line>` +
+        `<text x="${padL - 8}" y="${(yVal(t) + 4).toFixed(1)}" text-anchor="end" class="axis-text">${fmtCompactTWD(t)}</text>`
     )
     .join('');
-  const barW = Math.max(6, Math.min(24, plotW / Math.max(12, snapshots.length * 1.5)));
-  const pctBars = dailyPcts
+  const pGrid = [-pnlAbs, 0, pnlAbs]
     .map(
-      (p) => {
-        const y = yPct(p.pct);
-        const h = Math.max(2, Math.abs(y - zeroY));
-        const top = p.pct >= 0 ? y : zeroY;
-        return `<rect class="pct-bar ${pnlClass(p.pct)}" x="${(xOf(p.index) - barW / 2).toFixed(1)}" y="${top.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" rx="3">
-          <title>${esc(p.snapshot.date)}\n當日漲跌 ${signed(p.pct, fmtPct)}\n市值 ${fmtTWD(p.snapshot.totalValue)}</title>
-        </rect>`;
-      }
+      (t) =>
+        `<line x1="${padL}" y1="${yPnl(t).toFixed(1)}" x2="${padL + plotW}" y2="${yPnl(t).toFixed(1)}" class="${t === 0 ? 'zero-line' : 'grid-line'}"></line>` +
+        `<text x="${padL - 8}" y="${(yPnl(t) + 4).toFixed(1)}" text-anchor="end" class="axis-text">${t > 0 ? '+' : ''}${fmtCompactTWD(t)}</text>`
     )
     .join('');
-  const latestDailyPct = dailyPcts.length ? dailyPcts[dailyPcts.length - 1].pct : null;
+
+  const tickCount = Math.min(n, 6);
+  const tickIdxs = [...new Set(Array.from({ length: tickCount }, (_, k) => Math.round((k * (n - 1)) / Math.max(tickCount - 1, 1))))];
+  const xTicks = tickIdxs
+    .map(
+      (i) =>
+        `<text x="${xOf(i).toFixed(1)}" y="${xAxisY}" text-anchor="middle" class="axis-text">${esc(
+          snapshots[i].date.slice(5).replace('-', '/')
+        )}</text>`
+    )
+    .join('');
+
+  const latest = snapshots[n - 1];
+  const lastDaily = [...daily].reverse().find(Boolean) || null;
 
   el.innerHTML = `
     <div class="snapshot-summary">
       <span>最新市值 <strong>${fmtTWD(latest.totalValue)}</strong></span>
-      <span class="${pnlClass(latest.pnl ?? 0)}">未實現損益 <strong>${latest.pnl != null ? signed(latest.pnl, (n) => fmtTWD(n)) : '—'}</strong></span>
-      <span class="${pnlClass(latestDailyPct ?? 0)}">當日漲跌 <strong>${latestDailyPct != null ? signed(latestDailyPct, fmtPct) : '至少需 2 筆'}</strong></span>
+      <span class="${pnlClass(latest.pnl ?? 0)}">累計損益 <strong>${latest.pnl != null ? signed(latest.pnl, (n) => fmtTWD(n)) : '—'}</strong></span>
+      <span class="${pnlClass(lastDaily?.dPnl ?? 0)}">當日損益 <strong>${
+        lastDaily ? `${signed(lastDaily.dPnl, (n) => fmtTWD(n))}${lastDaily.dPct != null ? `（${signed(lastDaily.dPct, (v) => fmtPct(v, 2))}）` : ''}` : '至少需 2 筆'
+      }</strong></span>
     </div>
-    <svg viewBox="0 0 ${width} ${height}" class="snapshot-svg" role="img" aria-label="每日市值與損益率曲線圖">
-      <line x1="${pad.l}" y1="${pad.t}" x2="${pad.l}" y2="${pad.t + plotH}" class="axis-line"></line>
-      <line x1="${pad.l}" y1="${pad.t + plotH}" x2="${pad.l + plotW}" y2="${pad.t + plotH}" class="axis-line"></line>
-      <line x1="${pad.l + plotW}" y1="${pad.t}" x2="${pad.l + plotW}" y2="${pad.t + plotH}" class="axis-line"></line>
-      <line x1="${pad.l}" y1="${zeroY.toFixed(1)}" x2="${pad.l + plotW}" y2="${zeroY.toFixed(1)}" class="zero-line"></line>
-      <text x="${pad.l - 8}" y="${pad.t + 5}" text-anchor="end" class="axis-text">${fmtTWD(vMax)}</text>
-      <text x="${pad.l - 8}" y="${pad.t + plotH}" text-anchor="end" class="axis-text">${fmtTWD(vMin)}</text>
-      <text x="${pad.l + plotW + 8}" y="${pad.t + 5}" class="axis-text">${fmtPct(pMaxAbs)}</text>
-      <text x="${pad.l + plotW + 8}" y="${pad.t + plotH}" class="axis-text">${fmtPct(-pMaxAbs)}</text>
-      <text x="${pad.l}" y="${height - 12}" text-anchor="middle" class="axis-text">${esc(firstDate)}</text>
-      <text x="${pad.l + plotW}" y="${height - 12}" text-anchor="middle" class="axis-text">${esc(lastDate)}</text>
-      ${pctBars}
-      <path d="${valuePath}" class="value-line"></path>
-      ${points}
-    </svg>
+    <div class="snapshot-plot">
+      <svg viewBox="0 0 ${width} ${height}" class="snapshot-svg" id="snapshot-svg" role="img" aria-label="市值曲線與每日損益直方圖">
+        <text x="${padL}" y="18" class="panel-caption">總市值（台幣）</text>
+        <text x="${padL}" y="264" class="panel-caption">每日損益（台幣）</text>
+        ${vGrid}
+        ${areaPath ? `<path d="${areaPath}" class="value-area"></path>` : ''}
+        ${investedPath ? `<path d="${investedPath}" class="invested-line"></path>` : ''}
+        <path d="${valuePath}" class="value-line"></path>
+        ${n === 1 ? `<circle class="snapshot-point" cx="${xOf(0).toFixed(1)}" cy="${yVal(latest.totalValue).toFixed(1)}" r="4"></circle>` : ''}
+        ${pGrid}
+        ${bars}
+        ${xTicks}
+        <line id="snap-cross" class="cross-line" y1="${top.y0}" y2="${bot.y1}" x1="0" x2="0" hidden></line>
+        <circle id="snap-dot" class="snapshot-point" r="4" hidden></circle>
+        <rect id="snap-overlay" x="${padL}" y="${top.y0}" width="${plotW}" height="${bot.y1 - top.y0}" fill="transparent"></rect>
+      </svg>
+      <div class="chart-tooltip" id="snap-tooltip" hidden></div>
+    </div>
     <div class="snapshot-legend">
       <span><i class="legend-line value"></i>總市值</span>
-      <span><i class="legend-bar pct"></i>每日漲跌幅（右軸）</span>
+      ${investedPath ? '<span><i class="legend-line invested"></i>投入成本</span>' : ''}
+      <span><i class="legend-bar up"></i>單日獲利</span>
+      <span><i class="legend-bar down"></i>單日虧損</span>
     </div>`;
+
+  bindSnapshotHover(snapshots, daily, { xOf, yVal, padL, plotW, viewW: width });
+}
+
+function bindSnapshotHover(snapshots, daily, geo) {
+  const svg = $('snapshot-svg');
+  const overlay = $('snap-overlay');
+  const cross = $('snap-cross');
+  const dot = $('snap-dot');
+  const tip = $('snap-tooltip');
+  if (!svg || !overlay) return;
+  const wrap = svg.parentElement;
+  const n = snapshots.length;
+
+  overlay.addEventListener('mousemove', (e) => {
+    const rect = svg.getBoundingClientRect();
+    const sx = ((e.clientX - rect.left) / rect.width) * geo.viewW;
+    let i = n === 1 ? 0 : Math.round(((sx - geo.padL) / geo.plotW) * (n - 1));
+    i = Math.max(0, Math.min(n - 1, i));
+    const s = snapshots[i];
+    const d = daily[i];
+    const x = geo.xOf(i);
+
+    cross.setAttribute('x1', x);
+    cross.setAttribute('x2', x);
+    cross.hidden = false;
+    dot.setAttribute('cx', x);
+    dot.setAttribute('cy', geo.yVal(s.totalValue));
+    dot.hidden = false;
+
+    tip.innerHTML = `
+      <strong>${esc(s.date)}</strong><br>
+      市值 ${fmtTWD(s.totalValue)}<br>
+      ${s.totalInvested != null ? `投入 ${fmtTWD(s.totalInvested)}<br>` : ''}
+      <span class="${pnlClass(d?.dPnl ?? 0)}">當日損益 ${
+        d ? `${signed(d.dPnl, (v) => fmtTWD(v))}${d.dPct != null ? `（${signed(d.dPct, (v) => fmtPct(v, 2))}）` : ''}` : '—'
+      }</span><br>
+      <span class="${pnlClass(s.pnl ?? 0)}">累計損益 ${s.pnl != null ? signed(s.pnl, (v) => fmtTWD(v)) : '—'}</span>`;
+    tip.hidden = false;
+
+    const wrect = wrap.getBoundingClientRect();
+    const estW = 190;
+    let lx = e.clientX - wrect.left + 14;
+    if (lx + estW > wrect.width) lx = e.clientX - wrect.left - estW - 10;
+    tip.style.left = Math.max(0, lx) + 'px';
+    tip.style.top = e.clientY - wrect.top + 12 + 'px';
+  });
+  overlay.addEventListener('mouseleave', () => {
+    cross.hidden = true;
+    dot.hidden = true;
+    tip.hidden = true;
+  });
 }
 
 function renderHoldings(rows, totalInvested, totalValue, totalPnl) {

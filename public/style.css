@@ -474,8 +474,9 @@ h1 { font-size: 1.5rem; font-weight: 700; }
   height: auto;
   display: block;
 }
-.axis-line {
-  stroke: var(--border);
+.snapshot-plot { position: relative; }
+.grid-line {
+  stroke: var(--grid);
   stroke-width: 1;
 }
 .zero-line {
@@ -488,23 +489,61 @@ h1 { font-size: 1.5rem; font-weight: 700; }
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
+.panel-caption {
+  fill: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
 .value-line {
   fill: none;
+  stroke: var(--series-1);
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 3;
+  stroke-width: 2;
 }
-.value-line { stroke: var(--series-1); }
+.value-area {
+  fill: color-mix(in srgb, var(--series-1) 10%, transparent);
+}
+.invested-line {
+  fill: none;
+  stroke: var(--text-muted);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
 .snapshot-point {
   fill: var(--series-1);
   stroke: var(--surface);
   stroke-width: 2;
+  pointer-events: none;
 }
-.pct-bar {
-  fill: color-mix(in srgb, var(--up) 68%, transparent);
+.cross-line {
+  stroke: var(--baseline);
+  stroke-width: 1;
+  pointer-events: none;
 }
-.pct-bar.down {
-  fill: color-mix(in srgb, var(--down) 68%, transparent);
+.pnl-bar.up { fill: var(--up); }
+.pnl-bar.down { fill: var(--down); }
+.chart-tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--text-primary) 94%, transparent);
+  color: var(--surface);
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  z-index: 10;
+  max-width: 240px;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.24);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* tooltip 內的漲跌色要在深色底上仍可讀 */
+.chart-tooltip .up { color: #ff9d9d; }
+.chart-tooltip .down { color: #7fd97f; }
+@media (prefers-color-scheme: dark) {
+  .chart-tooltip .up { color: #c73535; }
+  .chart-tooltip .down { color: #1e7a1e; }
 }
 .snapshot-legend {
   display: flex;
@@ -522,15 +561,19 @@ h1 { font-size: 1.5rem; font-weight: 700; }
   margin-right: 6px;
   vertical-align: middle;
 }
+.legend-line.invested {
+  border-top: 2px dashed var(--text-muted);
+}
 .legend-bar {
   display: inline-block;
-  width: 18px;
+  width: 14px;
   height: 10px;
   border-radius: 3px;
   background: var(--up);
   margin-right: 6px;
   vertical-align: -1px;
 }
+.legend-bar.down { background: var(--down); }
 
 .bar-track {
   background: var(--grid);
