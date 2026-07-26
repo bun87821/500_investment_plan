@@ -210,6 +210,27 @@
       <p class="hint">「依總預算」適合還在分批投入時（把剩餘資金投向落後最多的標的）；「依目前市值」是不加錢的純再平衡（會出現減碼建議）。偏離小於基準的 1% 視為已平衡。建議僅供參考，未計入手續費與稅。</p>
     </section>
 
+    <section class="card" id="monthly-card" hidden>
+      <h2>月報</h2>
+      <p class="section-subtitle">每月投入、配息、損益與月報酬率（TWR），並與 0050 當月漲跌對比；點列展開當月交易</p>
+      <div class="table-wrap">
+        <table class="monthly-table">
+          <thead>
+            <tr>
+              <th>月份</th>
+              <th class="num">淨投入</th>
+              <th class="num">配息</th>
+              <th class="num">當月損益</th>
+              <th class="num">月報酬率</th>
+              <th class="num">0050 當月</th>
+            </tr>
+          </thead>
+          <tbody id="monthly-body"></tbody>
+        </table>
+      </div>
+      <p class="hint">月報酬率為時間加權（TWR），不受入金時點影響；由歷史回推序列計算，資料不足的月份可能缺漏。</p>
+    </section>
+
     <section class="grid-2">
       <div class="card">
         <h2 id="tx-form-title">新增交易</h2>

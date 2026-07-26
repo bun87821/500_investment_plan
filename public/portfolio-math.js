@@ -338,6 +338,50 @@
     return out;
   }
 
+  // 月報：把每日序列彙總成每月一列——淨入金、配息、當月損益、TWR（(1+dPct) 連乘）、
+  // 對比標的當月漲跌幅（月末收盤 vs 月初前最後收盤；首月以月內第一筆為基準）
+  function computeMonthlyReport({ series, benchCloses }) {
+    if (!Array.isArray(series) || !series.length) return [];
+    const byMonth = new Map();
+    for (const p of series) {
+      const month = String(p.date).slice(0, 7);
+      let m = byMonth.get(month);
+      if (!m) byMonth.set(month, (m = { month, flow: 0, dividends: 0, pnl: 0, growth: 1, hasPct: false }));
+      m.flow += p.flow || 0;
+      m.dividends += p.dividendToday || 0;
+      if (p.dPnl != null) m.pnl += p.dPnl;
+      if (p.dPct != null) {
+        m.growth *= 1 + p.dPct;
+        m.hasPct = true;
+      }
+    }
+    const bench = (Array.isArray(benchCloses) ? benchCloses : []).map(([ms, c]) => [msToDateStr(ms), c]);
+    return [...byMonth.values()]
+      .sort((a, b) => a.month.localeCompare(b.month))
+      .map((m) => {
+        let base = null;
+        let first = null;
+        let last = null;
+        for (const [d, c] of bench) {
+          if (d.slice(0, 7) < m.month) base = c;
+          else if (d.slice(0, 7) === m.month) {
+            if (first == null) first = c;
+            last = c;
+          }
+        }
+        if (base == null) base = first;
+        const benchPct = base != null && last != null && base > 0 ? (last - base) / base : null;
+        return {
+          month: m.month,
+          flow: m.flow,
+          dividends: m.dividends,
+          pnl: m.pnl,
+          twr: m.hasPct ? m.growth - 1 : null,
+          benchPct,
+        };
+      });
+  }
+
   // XIRR 年化報酬率：買入為負現金流、賣出/配息為正、期末市值（today 當日）為正，二分法解 NPV=0
   function computeXirr({ rows, stocks, transactions, quotes, today }) {
     if (!rows.length || rows.some((r) => r.valueTWD == null)) return null;
@@ -390,6 +434,7 @@
     fxRateOf,
     computeStock,
     computeDailySeries,
+    computeMonthlyReport,
     computeXirr,
     detectUnappliedSplits,
     detectUnrecordedDividends,

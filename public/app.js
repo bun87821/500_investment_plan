@@ -422,6 +422,7 @@ function render() {
   renderSnapshotChart(rows);
   renderDonut(rows);
   renderTransactions();
+  renderMonthlyReport();
 
   $('fx-info').textContent = [...new Set(state.stocks.map((s) => s.currency))]
     .filter((c) => c !== 'TWD')
@@ -1079,6 +1080,69 @@ function renderTransactions() {
     body.appendChild(tr);
   }
   $('tx-empty').hidden = sorted.length > 0;
+}
+
+// ---------- 月報 ----------
+function renderMonthlyReport() {
+  const card = $('monthly-card');
+  const series = computeDailySeries();
+  if (!series || !series.length) {
+    card.hidden = true;
+    return;
+  }
+  const months = PortfolioMath.computeMonthlyReport({
+    series,
+    benchCloses: state.history?.series?.[BENCH_SYMBOL] || [],
+  });
+  if (!months.length) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+  const body = $('monthly-body');
+  body.innerHTML = '';
+  for (const m of [...months].reverse()) {
+    const tr = document.createElement('tr');
+    tr.className = 'monthly-row';
+    const beat = m.twr != null && m.benchPct != null ? (m.twr >= m.benchPct ? ' ✓' : '') : '';
+    tr.innerHTML = `
+      <td>${esc(m.month)}</td>
+      <td class="num">${m.flow ? fmtTWD(m.flow) : '—'}</td>
+      <td class="num">${m.dividends ? fmtTWD(m.dividends) : '—'}</td>
+      <td class="num ${pnlClass(m.pnl)}">${signed(m.pnl, (n) => fmtTWD(n))}</td>
+      <td class="num ${pnlClass(m.twr ?? 0)}">${m.twr == null ? '—' : signed(m.twr, (n) => fmtPct(n, 2))}</td>
+      <td class="num">${m.benchPct == null ? '—' : signed(m.benchPct, (n) => fmtPct(n, 2)) + beat}</td>`;
+    tr.addEventListener('click', () => toggleMonthlyDetail(tr, m.month));
+    body.appendChild(tr);
+  }
+}
+
+function toggleMonthlyDetail(row, month) {
+  const existing = row.nextElementSibling;
+  if (existing && existing.classList.contains('monthly-detail')) {
+    existing.remove();
+    return;
+  }
+  document.querySelectorAll('.monthly-detail').forEach((el) => el.remove());
+  const txs = state.transactions
+    .filter((t) => String(t.date).slice(0, 7) === month)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const tr = document.createElement('tr');
+  tr.className = 'monthly-detail';
+  const items = txs.length
+    ? txs
+        .map((t) => {
+          const stock = state.stocks.find((s) => s.id === t.stockId);
+          const name = stock ? stock.name : t.stockId;
+          if (t.kind === 'split') return `${esc(t.date)} ${esc(name)} 分割 1→${fmtNum(t.ratio, 4)}`;
+          if (t.kind === 'dividend')
+            return `${esc(t.date)} ${esc(name)} 配息 ${t.twdCost != null ? fmtTWD(t.twdCost) : fmtNum(t.amount, 2) + ' ' + esc(stock?.currency || '')}`;
+          return `${esc(t.date)} ${esc(name)} ${t.shares > 0 ? '買' : '賣'} ${fmtNum(Math.abs(t.shares), 4)} 股 @ ${fmtNum(t.price, 4)}`;
+        })
+        .join('<br>')
+    : '本月無交易';
+  tr.innerHTML = `<td colspan="6" class="monthly-detail-cell">${items}</td>`;
+  row.after(tr);
 }
 
 // ---------- 交易表單（新增／編輯）----------

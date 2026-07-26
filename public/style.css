@@ -744,6 +744,12 @@ tfoot td {
 }
 .alert-actions button:hover { border-color: var(--accent, #888); }
 
+/* 月報 */
+.monthly-table { width: 100%; border-collapse: collapse; }
+.monthly-row { cursor: pointer; }
+.monthly-row:hover td { background: rgba(128, 128, 128, 0.08); }
+.monthly-detail-cell { font-size: 0.85rem; opacity: 0.85; padding: 6px 10px 10px; }
+
 .tx-form-actions { display: flex; gap: 8px; }
 .tx-form-actions .btn-primary { flex: 1; }
 

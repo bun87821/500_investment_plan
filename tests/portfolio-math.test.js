@@ -438,6 +438,53 @@ test('computeDailySeries：無歷史收盤價或無交易 → null', () => {
   );
 });
 
+// ---------- computeMonthlyReport（月報）----------
+// 期望值手算：TWR＝當月 (1+dPct) 連乘 −1；0050 當月＝月末收盤 vs 月初前最後收盤。
+
+test('computeMonthlyReport：兩個月手算案例（投入、配息、損益、TWR、0050 對比）', () => {
+  const series = [
+    { date: '2026-01-30', value: 1000, invested: 1000, flow: 1000, dividendToday: 0, dPnl: null, dPct: null },
+    { date: '2026-01-31', value: 1020, invested: 1000, flow: 0, dividendToday: 0, dPnl: 20, dPct: 0.02 },
+    { date: '2026-02-01', value: 2120, invested: 2100, flow: 1100, dividendToday: 0, dPnl: 0, dPct: 0 },
+    { date: '2026-02-02', value: 2226, invested: 2100, flow: 0, dividendToday: 50, dPnl: 156, dPct: 156 / 2120 },
+  ];
+  const benchCloses = [
+    [D(2026, 1, 30), 100],
+    [D(2026, 1, 31), 102],
+    [D(2026, 2, 1), 104],
+    [D(2026, 2, 2), 107.1],
+  ];
+  const rows = PM.computeMonthlyReport({ series, benchCloses });
+  assert.equal(rows.length, 2);
+
+  const jan = rows[0];
+  assert.equal(jan.month, '2026-01');
+  assert.equal(jan.flow, 1000);
+  assert.equal(jan.dividends, 0);
+  assert.equal(jan.pnl, 20);
+  assert.ok(Math.abs(jan.twr - 0.02) < 1e-12); // 唯一有 dPct 的一天 +2%
+  assert.ok(Math.abs(jan.benchPct - 0.02) < 1e-12); // 100 → 102（首月以月內第一筆為基準）
+
+  const feb = rows[1];
+  assert.equal(feb.month, '2026-02');
+  assert.equal(feb.flow, 1100);
+  assert.equal(feb.dividends, 50);
+  assert.equal(feb.pnl, 156);
+  assert.ok(Math.abs(feb.twr - 156 / 2120) < 1e-12); // (1+0)(1+156/2120)−1
+  assert.ok(Math.abs(feb.benchPct - 0.05) < 1e-12); // 102 → 107.1，5.1/102
+});
+
+test('computeMonthlyReport：無序列 → 空陣列；無 0050 資料 → benchPct null', () => {
+  assert.deepEqual(PM.computeMonthlyReport({ series: null, benchCloses: [] }), []);
+  const rows = PM.computeMonthlyReport({
+    series: [{ date: '2026-01-05', value: 100, invested: 100, flow: 100, dividendToday: 0, dPnl: null, dPct: null }],
+    benchCloses: [],
+  });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].benchPct, null);
+  assert.equal(rows[0].twr, null); // 沒有任何 dPct
+});
+
 test('computeXirr：期間不足 30 天、市值缺漏、無交易 → null', () => {
   const txs = [{ stockId: 'aaa', date: '2026-01-01', shares: 100, price: 10 }];
   assert.equal(PM.computeXirr(xirrArgs(txs, [{ valueTWD: 1100 }], '2026-01-15')), null); // < 30 天
