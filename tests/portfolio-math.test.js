@@ -162,6 +162,123 @@ test('computeXirr：配息為正現金流（精確構造 r=0.1）', () => {
   assert.ok(Math.abs(r - 0.1) < 1e-6, `expect 0.1, got ${r}`);
 });
 
+// ---------- computeDailySeries（歷史回推）----------
+// 期望值皆為手算。日期以 UTC ms 表示（與 Yahoo 歷史序列一致）。
+
+const D = (y, m, d) => Date.UTC(y, m - 1, d);
+const HIST_AAA = [
+  [D(2026, 1, 5), 100],
+  [D(2026, 1, 6), 110],
+  [D(2026, 1, 7), 105],
+];
+
+const seriesArgs = (transactions, extra = {}) => ({
+  history: { series: { 'AAA.TW': HIST_AAA, ...(extra.series || {}) } },
+  stocks: [TW_STOCK],
+  transactions,
+  quotes: extra.quotes || {},
+  budget: 0,
+  benchSymbol: '0050.TW',
+  today: extra.today || '2026-02-01',
+});
+
+test('computeDailySeries：買入當日入金不產生假損益（手算）', () => {
+  // 01-05 買 10@100（入金 1,000）；01-06 加碼 10@110（入金 1,100）
+  // 01-06 市值 2,200：當日損益 = 2,200 − 1,000 − 1,100 = +100（只有舊持股的漲幅）
+  const txs = [
+    { stockId: 'aaa', date: '2026-01-05', shares: 10, price: 100 },
+    { stockId: 'aaa', date: '2026-01-06', shares: 10, price: 110 },
+  ];
+  const out = PM.computeDailySeries(seriesArgs(txs));
+  assert.equal(out.length, 3);
+  assert.deepEqual(
+    out.map((p) => [p.date, p.value, p.invested, p.flow]),
+    [
+      ['2026-01-05', 1000, 1000, 1000],
+      ['2026-01-06', 2200, 2100, 1100],
+      ['2026-01-07', 2100, 2100, 0],
+    ]
+  );
+  assert.equal(out[0].dPnl, null);
+  assert.equal(out[1].dPnl, 100);
+  assert.ok(Math.abs(out[1].dPct - 0.1) < 1e-12);
+  assert.equal(out[2].dPnl, -100);
+});
+
+test('computeDailySeries：賣出當日金流不誤算成損益（手算）', () => {
+  // 01-07 賣 5@105（入帳 525）：市值 15×105=1,575
+  // 當日損益 = 1,575 − 2,200 − (−525) = −100（真跌價，賣出入帳不算獲利）
+  const txs = [
+    { stockId: 'aaa', date: '2026-01-05', shares: 10, price: 100 },
+    { stockId: 'aaa', date: '2026-01-06', shares: 10, price: 110 },
+    { stockId: 'aaa', date: '2026-01-07', shares: -5, price: 105 },
+  ];
+  const out = PM.computeDailySeries(seriesArgs(txs));
+  const last = out[out.length - 1];
+  assert.equal(last.value, 1575);
+  assert.equal(last.flow, -525);
+  assert.equal(last.dPnl, -100);
+});
+
+test('computeDailySeries：配息當日計入當日損益、不動市值與成本', () => {
+  // 01-07 配息 50：當日損益 = 2,100 − 2,200 − 0 + 50 = −50
+  const txs = [
+    { stockId: 'aaa', date: '2026-01-05', shares: 10, price: 100 },
+    { stockId: 'aaa', date: '2026-01-06', shares: 10, price: 110 },
+    { stockId: 'aaa', date: '2026-01-07', kind: 'dividend', twdCost: 50 },
+  ];
+  const out = PM.computeDailySeries(seriesArgs(txs));
+  const last = out[out.length - 1];
+  assert.equal(last.invested, 2100);
+  assert.equal(last.dividendToday, 50);
+  assert.equal(last.dPnl, -50);
+});
+
+test('computeDailySeries：0050 對比線＝同日同額投入（手算）', () => {
+  // 0050 收盤 50/55/52.5；01-05 投入 1,000 → 20 單位；01-06 投入 1,100 → +20 單位
+  const txs = [
+    { stockId: 'aaa', date: '2026-01-05', shares: 10, price: 100 },
+    { stockId: 'aaa', date: '2026-01-06', shares: 10, price: 110 },
+  ];
+  const bench = [
+    [D(2026, 1, 5), 50],
+    [D(2026, 1, 6), 55],
+    [D(2026, 1, 7), 52.5],
+  ];
+  const out = PM.computeDailySeries(seriesArgs(txs, { series: { '0050.TW': bench } }));
+  assert.deepEqual(
+    out.map((p) => [p.date, p.bench]),
+    [
+      ['2026-01-05', 1000], // 20 × 50
+      ['2026-01-06', 2200], // 40 × 55
+      ['2026-01-07', 2100], // 40 × 52.5
+    ]
+  );
+});
+
+test('computeDailySeries：歷史沒有今天但有即時報價 → 補上今日點', () => {
+  const txs = [
+    { stockId: 'aaa', date: '2026-01-05', shares: 10, price: 100 },
+    { stockId: 'aaa', date: '2026-01-06', shares: 10, price: 110 },
+  ];
+  const out = PM.computeDailySeries(
+    seriesArgs(txs, { quotes: { 'AAA.TW': { price: 120 } }, today: '2026-01-08' })
+  );
+  const last = out[out.length - 1];
+  assert.equal(last.date, '2026-01-08');
+  assert.equal(last.value, 2400); // 20 × 120
+  assert.equal(last.invested, 2100);
+  assert.equal(last.dPnl, 300); // 2400 − 2100 − 0
+});
+
+test('computeDailySeries：無歷史資料或無交易 → null', () => {
+  assert.equal(PM.computeDailySeries(seriesArgs([])), null);
+  assert.equal(
+    PM.computeDailySeries({ ...seriesArgs([{ stockId: 'aaa', date: '2026-01-05', shares: 1, price: 1 }]), history: null }),
+    null
+  );
+});
+
 test('computeXirr：期間不足 30 天、市值缺漏、無交易 → null', () => {
   const txs = [{ stockId: 'aaa', date: '2026-01-01', shares: 100, price: 10 }];
   assert.equal(PM.computeXirr(xirrArgs(txs, [{ valueTWD: 1100 }], '2026-01-15')), null); // < 30 天
