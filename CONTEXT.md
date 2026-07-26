@@ -21,6 +21,12 @@
 | XIRR | XIRR | 以金流計算的年化報酬率 |
 | 0050 對比 | benchmark | 「同額同日投入 0050」的對照市值曲線 |
 | 再平衡 | rebalance | 依目標比例算出每檔應買（賣）股數；兩種基準：「依總預算」（分批投入）與「依目前市值」（不加錢純再平衡）；偏離 <1% 視為已平衡 |
+| 分割 | `kind: 'split'` | 股票分割紀錄（`ratio`＝比例）；重放時股數 ×ratio、成本不變、無現金流 |
+| 分割偵測 | unapplied split | Yahoo 分割事件中「分割日晚於首筆買入、且尚未有對應分割紀錄」者，以提醒橫幅呈現 |
+| 未記帳配息 | unrecorded dividend | Yahoo 除息事件中「除息日仍有股數、但 30 天內沒有配息交易」者 |
+| 忽略清單 | `ignoredEvents` | 已忽略的提醒鍵（`split:<代號>:<日期>`／`div:<代號>:<日期>`），存在計畫資料裡跨裝置同步 |
+| 月報 | monthly report | 每月一列的總覽：淨投入、配息、當月損益、月報酬率（TWR）、0050 當月對比 |
+| 月報酬率 | TWR | 時間加權報酬率＝當月每日 `dPct` 的 (1+r) 連乘 −1，不受入金時點影響 |
 | 樂觀鎖 | `rev` | 計畫的版本號；`PUT /api/portfolio` 需帶上讀到的 `rev`，不符則拒絕寫入，防多裝置互相覆蓋 |
 | 使用者模式 | user mode | 單人模式（未設 `GOOGLE_CLIENT_ID`，共用 `legacy` 列）／訪客（localStorage）／已登入（Postgres 依 Google 帳號分開） |
 

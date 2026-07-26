@@ -252,6 +252,12 @@ app.put('/api/portfolio', async (req, res) => {
     }
     doc.snapshots = body.snapshots;
   }
+  if (body.ignoredEvents !== undefined) {
+    if (!Array.isArray(body.ignoredEvents) || body.ignoredEvents.some((x) => typeof x !== 'string')) {
+      return res.status(400).json({ error: 'ignoredEvents 必須是字串陣列' });
+    }
+    doc.ignoredEvents = body.ignoredEvents;
+  }
   try {
     // 樂觀鎖：客戶端帶上讀取時的 rev，不符表示其他裝置已改過 → 409 附最新資料
     const expectedRev = body.rev === undefined ? null : Number(body.rev);
@@ -268,6 +274,8 @@ app.put('/api/portfolio', async (req, res) => {
 });
 
 // ---- 報價代理（Yahoo Finance）----
+// YAHOO_CHART_BASE 可指向測試替身，讓快取行為能在測試中驗證；正式環境用預設值
+const YAHOO_CHART_BASE = process.env.YAHOO_CHART_BASE || 'https://query1.finance.yahoo.com';
 const quoteCache = new Map(); // symbol -> { at, data }
 const CACHE_MS = 60 * 1000;
 
@@ -275,7 +283,7 @@ async function fetchQuote(symbol) {
   const cached = quoteCache.get(symbol);
   if (cached && Date.now() - cached.at < CACHE_MS) return cached.data;
 
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d`;
+  const url = `${YAHOO_CHART_BASE}/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d`;
   const resp = await fetch(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (portfolio-tracker)' },
   });
@@ -487,7 +495,7 @@ async function fetchHistory(symbol, range) {
   const cached = histCache.get(key);
   if (cached && Date.now() - cached.at < HIST_CACHE_MS) return cached.data;
 
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=1d`;
+  const url = `${YAHOO_CHART_BASE}/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=1d`;
   const resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (portfolio-tracker)' } });
   if (!resp.ok) throw new Error(`Yahoo 回應 ${resp.status}`);
   const json = await resp.json();
@@ -521,6 +529,53 @@ app.get('/api/history', async (req, res) => {
     else errors[symbols[i]] = r.reason.message;
   });
   res.json({ series, errors, fetchedAt: Date.now() });
+});
+
+// ---- 分割與配息事件代理（分割偵測、未記帳配息提醒用）----
+const eventsCache = new Map(); // symbol -> { at, data }
+const EVENTS_CACHE_MS = 6 * 60 * 60 * 1000;
+
+async function fetchEvents(symbol) {
+  const cached = eventsCache.get(symbol);
+  if (cached && Date.now() - cached.at < EVENTS_CACHE_MS) return cached.data;
+
+  const url = `${YAHOO_CHART_BASE}/v8/finance/chart/${encodeURIComponent(symbol)}?range=max&interval=1d&events=div%2Csplit`;
+  const resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (portfolio-tracker)' } });
+  if (!resp.ok) throw new Error(`Yahoo 回應 ${resp.status}`);
+  const json = await resp.json();
+  const events = json?.chart?.result?.[0]?.events || {};
+  // 一律轉成數字：下游把這些值直接餵給計算與格式化，不能讓字串混進來
+  const dividends = Object.values(events.dividends || {})
+    .filter((d) => d.date != null && d.amount != null)
+    .map((d) => [Number(d.date) * 1000, Number(d.amount)])
+    .filter(([ms, amount]) => Number.isFinite(ms) && Number.isFinite(amount))
+    .sort((a, b) => a[0] - b[0]);
+  const splits = Object.values(events.splits || {})
+    .filter((s) => s.date != null && s.numerator != null && s.denominator != null)
+    .map((s) => [Number(s.date) * 1000, Number(s.numerator), Number(s.denominator)])
+    .filter((row) => row.every((v) => Number.isFinite(v)))
+    .sort((a, b) => a[0] - b[0]);
+  const data = { dividends, splits };
+  eventsCache.set(symbol, { at: Date.now(), data });
+  return data;
+}
+
+app.get('/api/events', async (req, res) => {
+  const symbols = String(req.query.symbols || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 60);
+  if (!symbols.length) return res.status(400).json({ error: '缺少 symbols 參數' });
+
+  const results = await Promise.allSettled(symbols.map(fetchEvents));
+  const events = {};
+  const errors = {};
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') events[symbols[i]] = r.value;
+    else errors[symbols[i]] = r.reason.message;
+  });
+  res.json({ events, errors, fetchedAt: Date.now() });
 });
 
 app.post('/api/snapshots/today', async (req, res) => {

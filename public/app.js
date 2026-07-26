@@ -61,6 +61,8 @@ const state = {
   stocks: DEFAULT_STOCKS,
   transactions: [],
   snapshots: [],
+  ignoredEvents: [], // 已忽略的分割/配息提醒（跨裝置同步）
+  events: null, // /api/events 回傳的分割與配息事件
   rev: 0, // 伺服器資料版本（樂觀鎖）
   quotes: {},
   quoteErrors: {},
@@ -113,6 +115,7 @@ function applyDoc(data) {
   if (data.rev !== undefined) state.rev = Number(data.rev) || 0;
   state.transactions = Array.isArray(data.transactions) ? data.transactions : [];
   state.snapshots = Array.isArray(data.snapshots) ? data.snapshots : [];
+  state.ignoredEvents = Array.isArray(data.ignoredEvents) ? data.ignoredEvents : [];
   if (Array.isArray(data.stocks) && data.stocks.length) {
     // 舊資料可能沒有 category 欄位，依 id 對回預設分類，找不到則標為「未分類」
     state.stocks = data.stocks.map((s) => ({
@@ -161,8 +164,20 @@ async function loadPortfolio() {
 }
 
 async function savePortfolio({ includeSnapshots = false } = {}) {
-  const backup = { budget: state.budget, stocks: state.stocks, transactions: state.transactions, snapshots: state.snapshots };
-  const payload = { budget: state.budget, stocks: state.stocks, transactions: state.transactions, rev: state.rev };
+  const backup = {
+    budget: state.budget,
+    stocks: state.stocks,
+    transactions: state.transactions,
+    snapshots: state.snapshots,
+    ignoredEvents: state.ignoredEvents,
+  };
+  const payload = {
+    budget: state.budget,
+    stocks: state.stocks,
+    transactions: state.transactions,
+    ignoredEvents: state.ignoredEvents,
+    rev: state.rev,
+  };
   if (includeSnapshots || isGuest()) payload.snapshots = state.snapshots;
   localStorage.setItem(backupKey(), JSON.stringify(backup));
   if (isGuest()) return; // 訪客模式只存瀏覽器
@@ -225,6 +240,99 @@ async function loadQuotes() {
     showNotice('部分報價取得失敗：' + failed.join('、'));
   } else {
     hideNotice();
+  }
+}
+
+// ---------- 分割與配息提醒 ----------
+async function loadEvents() {
+  const held = state.stocks.filter((s) => state.transactions.some((t) => t.stockId === s.id));
+  if (!held.length) {
+    state.events = null;
+    renderAlerts();
+    return;
+  }
+  try {
+    const res = await fetch('/api/events?symbols=' + encodeURIComponent(held.map((s) => s.symbol).join(',')));
+    if (!res.ok) throw new Error();
+    state.events = (await res.json()).events || {};
+  } catch {
+    state.events = null; // 抓不到事件就不提醒
+  }
+  renderAlerts();
+}
+
+function collectAlerts() {
+  if (!state.events) return [];
+  const alerts = [];
+  for (const stock of state.stocks) {
+    const ev = state.events[stock.symbol];
+    if (!ev) continue;
+    for (const s of PortfolioMath.detectUnappliedSplits({
+      stock,
+      transactions: state.transactions,
+      splits: ev.splits,
+      ignored: state.ignoredEvents,
+    })) {
+      alerts.push({ type: 'split', stock, ...s });
+    }
+    for (const d of PortfolioMath.detectUnrecordedDividends({
+      stock,
+      transactions: state.transactions,
+      dividends: ev.dividends,
+      splits: ev.splits,
+      ignored: state.ignoredEvents,
+    })) {
+      alerts.push({ type: 'div', stock, ...d });
+    }
+  }
+  return alerts;
+}
+
+function renderAlerts() {
+  const box = $('alerts');
+  const alerts = collectAlerts();
+  box.innerHTML = '';
+  for (const a of alerts) {
+    const div = document.createElement('div');
+    div.className = 'notice alert-banner';
+    const key = PortfolioMath.eventKey(a.type, a.stock.symbol, a.date);
+    if (a.type === 'split') {
+      div.innerHTML = `📢 <b>${esc(a.stock.name)}</b> 於 ${esc(a.date)} 股票分割 1→${fmtNum(a.ratio, 4)}，你的交易紀錄尚未調整。
+        <span class="alert-actions"><button class="alert-apply">套用分割</button><button class="alert-ignore">忽略</button></span>`;
+      div.querySelector('.alert-apply').addEventListener('click', async () => {
+        state.transactions.push({
+          id: 'split-' + a.stock.id + '-' + a.date,
+          stockId: a.stock.id,
+          date: a.date,
+          kind: 'split',
+          ratio: a.ratio,
+        });
+        await savePortfolio();
+        render();
+        renderAlerts();
+        loadHistory();
+      });
+    } else {
+      div.innerHTML = `💰 <b>${esc(a.stock.name)}</b> 於 ${esc(a.date)} 除息，每股 ${fmtNum(a.perShare, 4)} ${esc(
+        a.stock.currency
+      )}（分割調整後 ${fmtNum(a.shares, 2)} 股，估 ${fmtNum(a.estimatedAmount, 2)} ${esc(a.stock.currency)}），尚未記帳。
+        <span class="alert-actions"><button class="alert-fill">帶入配息表單</button><button class="alert-ignore">忽略</button></span>`;
+      div.querySelector('.alert-fill').addEventListener('click', () => {
+        $('tx-kind').value = 'dividend';
+        updateTxKindUI();
+        $('tx-stock').value = a.stock.id;
+        $('tx-date').value = a.date;
+        $('tx-amount').value = String(Math.round(a.estimatedAmount * 100) / 100);
+        $('tx-twd').value = '';
+        $('tx-form').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      });
+    }
+    div.querySelector('.alert-ignore').addEventListener('click', async () => {
+      state.ignoredEvents.push(key);
+      await savePortfolio();
+      renderAlerts();
+    });
+    box.appendChild(div);
   }
 }
 
@@ -314,6 +422,7 @@ function render() {
   renderSnapshotChart(rows);
   renderDonut(rows);
   renderTransactions();
+  renderMonthlyReport();
 
   $('fx-info').textContent = [...new Set(state.stocks.map((s) => s.currency))]
     .filter((c) => c !== 'TWD')
@@ -949,25 +1058,91 @@ function renderTransactions() {
   for (const t of sorted) {
     const stock = state.stocks.find((s) => s.id === t.stockId);
     const isDiv = t.kind === 'dividend';
-    const kindChip = isDiv
-      ? '<span class="chip chip-kind div">息</span>'
-      : t.shares < 0
-        ? '<span class="chip chip-kind sell">賣</span>'
-        : '<span class="chip chip-kind buy">買</span>';
+    const isSplit = t.kind === 'split';
+    const kindChip = isSplit
+      ? '<span class="chip chip-kind split">割</span>'
+      : isDiv
+        ? '<span class="chip chip-kind div">息</span>'
+        : t.shares < 0
+          ? '<span class="chip chip-kind sell">賣</span>'
+          : '<span class="chip chip-kind buy">買</span>';
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${esc(t.date)}</td>
       <td>${esc(stock ? stock.name : t.stockId)} ${kindChip}</td>
-      <td class="num ${!isDiv && t.shares < 0 ? 'down' : ''}">${isDiv ? '—' : fmtNum(t.shares, 4)}</td>
-      <td class="num">${isDiv ? fmtNum(t.amount, 2) : fmtNum(t.price, 4)} ${stock ? esc(stock.currency) : ''}</td>
-      <td class="num">${t.twdCost != null ? fmtTWD(t.twdCost) : '（依匯率）'}</td>
+      <td class="num ${!isDiv && !isSplit && t.shares < 0 ? 'down' : ''}">${isDiv || isSplit ? '—' : fmtNum(t.shares, 4)}</td>
+      <td class="num">${isSplit ? '分割 1→' + fmtNum(t.ratio, 4) : (isDiv ? fmtNum(t.amount, 2) : fmtNum(t.price, 4)) + ' ' + (stock ? esc(stock.currency) : '')}</td>
+      <td class="num">${isSplit ? '—' : t.twdCost != null ? fmtTWD(t.twdCost) : '（依匯率）'}</td>
       <td class="tx-actions">
-        <button class="tx-edit" data-id="${esc(t.id)}" title="編輯">✎</button>
+        ${isSplit ? '' : `<button class="tx-edit" data-id="${esc(t.id)}" title="編輯">✎</button>`}
         <button class="tx-del" data-id="${esc(t.id)}" title="刪除">✕</button>
       </td>`;
     body.appendChild(tr);
   }
   $('tx-empty').hidden = sorted.length > 0;
+}
+
+// ---------- 月報 ----------
+function renderMonthlyReport() {
+  const card = $('monthly-card');
+  const series = computeDailySeries();
+  if (!series || !series.length) {
+    card.hidden = true;
+    return;
+  }
+  const months = PortfolioMath.computeMonthlyReport({
+    series,
+    benchCloses: state.history?.series?.[BENCH_SYMBOL] || [],
+  });
+  if (!months.length) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+  const body = $('monthly-body');
+  body.innerHTML = '';
+  for (const m of [...months].reverse()) {
+    const tr = document.createElement('tr');
+    tr.className = 'monthly-row';
+    const beatsBenchmark = m.twr != null && m.benchPct != null && m.twr >= m.benchPct;
+    tr.innerHTML = `
+      <td>${esc(m.month)}</td>
+      <td class="num">${m.flow ? fmtTWD(m.flow) : '—'}</td>
+      <td class="num">${m.dividends ? fmtTWD(m.dividends) : '—'}</td>
+      <td class="num ${pnlClass(m.pnl)}">${signed(m.pnl, (n) => fmtTWD(n))}</td>
+      <td class="num ${pnlClass(m.twr ?? 0)}">${m.twr == null ? '—' : signed(m.twr, (n) => fmtPct(n, 2))}</td>
+      <td class="num">${m.benchPct == null ? '—' : signed(m.benchPct, (n) => fmtPct(n, 2)) + (beatsBenchmark ? ' ✓' : '')}</td>`;
+    tr.addEventListener('click', () => toggleMonthlyDetail(tr, m.month));
+    body.appendChild(tr);
+  }
+}
+
+function toggleMonthlyDetail(row, month) {
+  const existing = row.nextElementSibling;
+  if (existing && existing.classList.contains('monthly-detail')) {
+    existing.remove();
+    return;
+  }
+  document.querySelectorAll('.monthly-detail').forEach((el) => el.remove());
+  const txs = state.transactions
+    .filter((t) => String(t.date).slice(0, 7) === month)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const tr = document.createElement('tr');
+  tr.className = 'monthly-detail';
+  const items = txs.length
+    ? txs
+        .map((t) => {
+          const stock = state.stocks.find((s) => s.id === t.stockId);
+          const name = stock ? stock.name : t.stockId;
+          if (t.kind === 'split') return `${esc(t.date)} ${esc(name)} 分割 1→${fmtNum(t.ratio, 4)}`;
+          if (t.kind === 'dividend')
+            return `${esc(t.date)} ${esc(name)} 配息 ${t.twdCost != null ? fmtTWD(t.twdCost) : fmtNum(t.amount, 2) + ' ' + esc(stock?.currency || '')}`;
+          return `${esc(t.date)} ${esc(name)} ${t.shares > 0 ? '買' : '賣'} ${fmtNum(Math.abs(t.shares), 4)} 股 @ ${fmtNum(t.price, 4)}`;
+        })
+        .join('<br>')
+    : '本月無交易';
+  tr.innerHTML = `<td colspan="6" class="monthly-detail-cell">${items}</td>`;
+  row.after(tr);
 }
 
 // ---------- 交易表單（新增／編輯）----------
@@ -1476,6 +1651,7 @@ function initForm() {
     resetTxForm();
     render();
     loadHistory(); // 交易變動可能引入新標的或改變回推結果
+    loadEvents(); // 新交易可能讓提醒出現/消失
   });
 
   $('tx-cancel-edit').addEventListener('click', resetTxForm);
@@ -1494,6 +1670,7 @@ function initForm() {
     await savePortfolio();
     render();
     loadHistory();
+    renderAlerts();
   });
 
   $('csv-btn').addEventListener('click', () => $('csv-file').click());
@@ -1697,10 +1874,34 @@ async function enterApp() {
   await loadQuotes();
   render();
   loadHistory(); // 歷史價格較大，背景載入，完成後自動重畫圖表
+  loadEvents(); // 分割與配息事件，背景載入，完成後顯示提醒橫幅
+}
+
+// ---------- PWA ----------
+// service worker 在 https（正式站）與 localhost（本機驗證）註冊；
+// 端對端測試走 127.0.0.1，維持純網路，行為可預期。
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  if (location.protocol !== 'https:' && location.hostname !== 'localhost') return;
+  navigator.serviceWorker.register('sw.js').catch(() => {
+    /* 註冊失敗不影響使用 */
+  });
+}
+
+function watchOnlineStatus() {
+  const update = () => {
+    if (navigator.onLine) hideNotice();
+    else showNotice('目前離線，顯示的是最後一次載入的資料。');
+  };
+  window.addEventListener('online', update);
+  window.addEventListener('offline', update);
+  if (!navigator.onLine) update();
 }
 
 // ---------- 啟動 ----------
 (async function main() {
+  registerServiceWorker();
+  watchOnlineStatus();
   initForm();
   initEditor();
   $('logout-btn').addEventListener('click', async () => {

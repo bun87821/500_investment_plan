@@ -1,6 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const http = require('node:http');
 const { startServer, signSession } = require('./helpers');
 
 test('單人模式：portfolio 讀寫與樂觀鎖', async (t) => {
@@ -55,7 +56,24 @@ test('PUT 驗證：不合法輸入回 400', async (t) => {
   const srv = await startServer();
   t.after(() => srv.stop());
 
-  for (const bad of [{}, { transactions: 'x' }, { transactions: [], budget: -1 }, { transactions: [], stocks: 'x' }]) {
+  // ignoredEvents：合法（字串陣列）可寫入並讀回
+  let res = await fetch(srv.url + '/api/portfolio', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ transactions: [], ignoredEvents: ['split:NVDA:2024-06-10'] }),
+  });
+  assert.equal(res.status, 200);
+  res = await fetch(srv.url + '/api/portfolio');
+  assert.deepEqual((await res.json()).ignoredEvents, ['split:NVDA:2024-06-10']);
+
+  for (const bad of [
+    {},
+    { transactions: 'x' },
+    { transactions: [], budget: -1 },
+    { transactions: [], stocks: 'x' },
+    { transactions: [], ignoredEvents: 'x' },
+    { transactions: [], ignoredEvents: [1, 2] },
+  ]) {
     const res = await fetch(srv.url + '/api/portfolio', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -112,4 +130,70 @@ test('報價與歷史端點：缺參數回 400', async (t) => {
   assert.equal((await fetch(srv.url + '/api/quotes')).status, 400);
   assert.equal((await fetch(srv.url + '/api/history?symbols=2330.TW&range=bogus')).status, 400);
   assert.equal((await fetch(srv.url + '/api/history?range=3mo')).status, 400);
+});
+
+test('PWA：manifest 與 service worker 可取得且欄位齊全', async (t) => {
+  const srv = await startServer();
+  t.after(() => srv.stop());
+
+  const res = await fetch(srv.url + '/manifest.json');
+  assert.equal(res.status, 200);
+  const manifest = await res.json();
+  assert.equal(manifest.display, 'standalone');
+  assert.ok(manifest.name && manifest.short_name);
+  assert.ok(manifest.theme_color && manifest.background_color);
+  for (const size of ['192x192', '512x512']) {
+    assert.ok(manifest.icons.some((i) => i.sizes === size && i.type === 'image/png'), size + ' 圖示');
+  }
+  assert.ok(manifest.icons.some((i) => i.purpose === 'maskable'), 'maskable 圖示');
+
+  for (const icon of manifest.icons) {
+    assert.equal((await fetch(srv.url + '/' + icon.src)).status, 200, icon.src);
+  }
+  assert.equal((await fetch(srv.url + '/sw.js')).status, 200);
+});
+
+test('事件端點：缺 symbols 回 400', async (t) => {
+  const srv = await startServer();
+  t.after(() => srv.stop());
+
+  assert.equal((await fetch(srv.url + '/api/events')).status, 400);
+  assert.equal((await fetch(srv.url + '/api/events?symbols=')).status, 400);
+});
+
+test('事件端點：解析分割與配息、第二次請求走快取不重打上游', async (t) => {
+  // 以測試替身取代 Yahoo，並計算上游被打了幾次
+  let upstreamHits = 0;
+  const upstream = http.createServer((req, res) => {
+    upstreamHits++;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(
+      JSON.stringify({
+        chart: {
+          result: [
+            {
+              events: {
+                dividends: { '1': { date: 1772064000, amount: 4.5 } },
+                splits: { '2': { date: 1772668800, numerator: 10, denominator: 1 } },
+              },
+            },
+          ],
+        },
+      })
+    );
+  });
+  await new Promise((r) => upstream.listen(0, '127.0.0.1', r));
+  t.after(() => upstream.close());
+
+  const srv = await startServer({ YAHOO_CHART_BASE: `http://127.0.0.1:${upstream.address().port}` });
+  t.after(() => srv.stop());
+
+  const first = await (await fetch(srv.url + '/api/events?symbols=AAA.TW')).json();
+  assert.deepEqual(first.events['AAA.TW'].dividends, [[1772064000 * 1000, 4.5]]);
+  assert.deepEqual(first.events['AAA.TW'].splits, [[1772668800 * 1000, 10, 1]]);
+  assert.equal(upstreamHits, 1);
+
+  const second = await (await fetch(srv.url + '/api/events?symbols=AAA.TW')).json();
+  assert.deepEqual(second.events, first.events);
+  assert.equal(upstreamHits, 1, '第二次應命中快取，不重打上游');
 });

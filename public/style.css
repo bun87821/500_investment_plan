@@ -727,6 +727,28 @@ tfoot td {
 .chip-kind.buy { color: var(--up); }
 .chip-kind.sell { color: var(--down); }
 .chip-kind.div { color: var(--series-1); }
+.chip-kind.split { color: var(--series-2, #b58900); }
+
+/* 分割／配息提醒橫幅 */
+.alert-banner { display: block; margin-bottom: 8px; }
+.alert-actions { margin-left: 8px; white-space: nowrap; }
+.alert-actions button {
+  margin-left: 6px;
+  padding: 2px 10px;
+  font-size: 0.85rem;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.alert-actions button:hover { border-color: var(--accent, #888); }
+
+/* 月報 */
+.monthly-table { width: 100%; border-collapse: collapse; }
+.monthly-row { cursor: pointer; }
+.monthly-row:hover td { background: rgba(128, 128, 128, 0.08); }
+.monthly-detail-cell { font-size: 0.85rem; opacity: 0.85; padding: 6px 10px 10px; }
 
 .tx-form-actions { display: flex; gap: 8px; }
 .tx-form-actions .btn-primary { flex: 1; }

@@ -38,6 +38,12 @@
     let investedKnown = true;
 
     for (const t of txs) {
+      if (t.kind === 'split') {
+        // 分割：股數 × 比例、成本不變（均價隱含 ÷ 比例）、無現金流
+        const ratio = Number(t.ratio) || 0;
+        if (ratio > 0) shares *= ratio;
+        continue;
+      }
       if (t.kind === 'dividend') {
         if (t.twdCost != null) dividends += Number(t.twdCost) || 0;
         else if (fx != null) dividends += (Number(t.amount) || 0) * fx;
@@ -94,6 +100,105 @@
     };
   }
 
+  function msToDateStr(ms) {
+    return new Date(ms).toISOString().slice(0, 10);
+  }
+
+  // 提醒的忽略鍵，格式見 CONTEXT.md：`split:<代號>:<日期>` / `div:<代號>:<日期>`
+  function eventKey(type, symbol, date) {
+    return type + ':' + symbol + ':' + date;
+  }
+
+  // 分割調整係數：把「date 當天的股數」換算成「所有更晚的分割都套用後」的股數。
+  // splitList 統一為 [[date, ratio], ...]，來源可為 Yahoo 事件或 kind:'split' 交易。
+  function splitFactorAfter(splitList, date) {
+    let factor = 1;
+    for (const [d, ratio] of splitList) if (d > date && ratio > 0) factor *= ratio;
+    return factor;
+  }
+
+  // Yahoo 分割事件 [[ms, numerator, denominator]] → [[date, ratio]]
+  function normalizeSplitEvents(splits) {
+    return (Array.isArray(splits) ? splits : [])
+      .map(([ms, numerator, denominator]) => [msToDateStr(ms), denominator > 0 ? numerator / denominator : 0])
+      .filter(([, ratio]) => ratio > 0);
+  }
+
+  // 分割日當天的股數（未套用任何分割前的原始口徑）
+  function rawSharesOn(sortedTxs, date) {
+    let s = 0;
+    for (const t of sortedTxs) {
+      if (t.kind === 'dividend' || t.kind === 'split') continue;
+      if (String(t.date) > date) break;
+      s += Number(t.shares) || 0;
+    }
+    return s;
+  }
+
+  // 找出「分割日當天仍有股數、且尚未套用（無 7 天內同比例的 split 紀錄）也未忽略」的分割事件
+  // splits：Yahoo 事件 [[ms, numerator, denominator], ...]；ignored：`split:<代號>:<日期>` 字串陣列
+  function detectUnappliedSplits({ stock, transactions, splits, ignored }) {
+    const list = Array.isArray(splits) ? splits : [];
+    if (!list.length) return [];
+    const mine = transactions
+      .filter((t) => t.stockId === stock.id)
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    const splitTxs = mine.filter((t) => t.kind === 'split');
+    const out = [];
+    for (const [ms, numerator, denominator] of list) {
+      const date = msToDateStr(ms);
+      if ((ignored || []).includes(eventKey('split', stock.symbol, date))) continue;
+      const ratio = denominator > 0 ? numerator / denominator : 0;
+      if (!(ratio > 0) || ratio === 1) continue;
+      // 分割當天沒有股數就與這個計畫無關（含分割前尚未買進、以及分割前已全數賣出）
+      if (!(rawSharesOn(mine, date) > 0)) continue;
+      // 已套用：7 天內有一筆比例相符的分割紀錄（比例不符表示是另一次分割，仍要提醒）
+      const applied = splitTxs.some(
+        (t) =>
+          Math.abs(new Date(String(t.date)).getTime() - ms) <= 7 * 86400_000 &&
+          Math.abs((Number(t.ratio) || 0) - ratio) < 1e-9
+      );
+      if (applied) continue;
+      out.push({ stockId: stock.id, symbol: stock.symbol, date, ratio });
+    }
+    return out;
+  }
+
+  // 找出「除息日持有股數 > 0、除息日後 30 天內沒有配息交易、也未忽略」的除息事件
+  // dividends：[[ms, 每股金額], ...]（Yahoo 為分割調整後口徑，故估算股數也用調整後）
+  function detectUnrecordedDividends({ stock, transactions, dividends, splits, ignored }) {
+    const evs = Array.isArray(dividends) ? dividends : [];
+    if (!evs.length) return [];
+    const eventSplits = normalizeSplitEvents(splits);
+    const mine = transactions
+      .filter((t) => t.stockId === stock.id)
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    const divTxs = mine.filter((t) => t.kind === 'dividend');
+    const sharesAdjOn = (date) => {
+      let s = 0;
+      for (const t of mine) {
+        if (t.kind === 'dividend' || t.kind === 'split') continue;
+        if (String(t.date) > date) break;
+        s += (Number(t.shares) || 0) * splitFactorAfter(eventSplits, String(t.date));
+      }
+      return s;
+    };
+    const out = [];
+    for (const [ms, perShare] of evs) {
+      const date = msToDateStr(ms);
+      if ((ignored || []).includes(eventKey('div', stock.symbol, date))) continue;
+      const shares = sharesAdjOn(date);
+      if (!(shares > 0)) continue;
+      const recorded = divTxs.some((t) => {
+        const d = String(t.date);
+        return d >= date && new Date(d).getTime() - ms <= 30 * 86400_000;
+      });
+      if (recorded) continue;
+      out.push({ stockId: stock.id, symbol: stock.symbol, date, perShare, shares, estimatedAmount: perShare * shares });
+    }
+    return out;
+  }
+
   // 由交易紀錄＋歷史收盤價逐日重放，回推每天的市值、持有成本、當日損益與對比線
   function computeDailySeries({ history, stocks, transactions, quotes, budget, benchSymbol, today }) {
     const hist = history;
@@ -131,6 +236,19 @@
 
     const stockOf = Object.fromEntries(held.map((s) => [s.id, s]));
     const bySt = Object.fromEntries(held.map((s) => [s.id, { shares: 0, costTWD: 0 }]));
+    // Yahoo 歷史收盤是分割調整後價格：把每筆買賣的股數乘上「交易日之後所有分割」的比例，
+    // 讓「調整後股數 × 調整後收盤」等於當日實際市值（分割日不會出現假損益）
+    const splitsBySt = {};
+    for (const t of txs) {
+      if (t.kind === 'split' && stockOf[t.stockId]) {
+        (splitsBySt[t.stockId] = splitsBySt[t.stockId] || []).push([String(t.date), Number(t.ratio) || 0]);
+      }
+    }
+    const splitFactorAfter = (stockId, date) => {
+      let f = 1;
+      for (const [d, r] of splitsBySt[stockId] || []) if (d > date && r > 0) f *= r;
+      return f;
+    };
     const benchFF = ff[benchSymbol];
     let benchUnits = 0;
     let benchOk = !!benchFF;
@@ -143,13 +261,15 @@
       if (!stock) return { flow: 0, dividend: 0 };
       const fxSym = fxSymbolOf(stock.currency);
       const fxT = fxSym ? ff[fxSym]?.(t.date) ?? ff[fxSym]?.(date) : 1;
+      if (t.kind === 'split') return { flow: 0, dividend: 0 }; // 效果已由 splitFactorAfter 吸收
       if (t.kind === 'dividend') {
         const amt = t.twdCost != null ? Number(t.twdCost) || 0 : (Number(t.amount) || 0) * (fxT ?? 0);
         return { flow: 0, dividend: amt };
       }
-      const s = Number(t.shares) || 0;
+      const rawShares = Number(t.shares) || 0;
+      const s = rawShares * splitFactorAfter(t.stockId, String(t.date)); // 股數用調整後
       const price = Number(t.price) || 0;
-      const flowT = t.twdCost != null ? Math.abs(Number(t.twdCost)) : Math.abs(s) * price * (fxT ?? 0);
+      const flowT = t.twdCost != null ? Math.abs(Number(t.twdCost)) : Math.abs(rawShares) * price * (fxT ?? 0); // 金流用原始股數
       const st = bySt[t.stockId];
       let flow = 0;
       if (s > 0) {
@@ -176,11 +296,13 @@
     for (const date of dates) {
       let flow = 0;
       let dividendToday = 0;
+      // 每筆交易只會被消化一次，因此消化到的配息就屬於「上一個資料點到今天」這段區間；
+      // 不能只認 t.date === date，否則記在週末／休市日的配息會被整筆丟棄。
       while (ti < txs.length && txs[ti].date <= date) {
         const t = txs[ti++];
         const r = consumeTx(t, date);
         flow += r.flow;
-        if (t.date === date) dividendToday += r.dividend;
+        dividendToday += r.dividend;
       }
       let value = 0;
       let ok = true;
@@ -220,7 +342,7 @@
           const t = txs[ti++];
           const r = consumeTx(t, today);
           flow += r.flow;
-          if (t.date === today) dividendToday += r.dividend;
+          dividendToday += r.dividend;
         }
         const benchQuote = quotes[benchSymbol]?.price ?? (benchOk ? benchFF(today) : null);
         out.push({
@@ -247,12 +369,57 @@
     return out;
   }
 
+  // 月報：把每日序列彙總成每月一列——淨入金、配息、當月損益、TWR（(1+dPct) 連乘）、
+  // 對比標的當月漲跌幅（月末收盤 vs 月初前最後收盤；首月以月內第一筆為基準）
+  function computeMonthlyReport({ series, benchCloses }) {
+    if (!Array.isArray(series) || !series.length) return [];
+    const byMonth = new Map();
+    for (const p of series) {
+      const month = String(p.date).slice(0, 7);
+      let m = byMonth.get(month);
+      if (!m) byMonth.set(month, (m = { month, flow: 0, dividends: 0, pnl: 0, growth: 1, hasPct: false }));
+      m.flow += p.flow || 0;
+      m.dividends += p.dividendToday || 0;
+      if (p.dPnl != null) m.pnl += p.dPnl;
+      if (p.dPct != null) {
+        m.growth *= 1 + p.dPct;
+        m.hasPct = true;
+      }
+    }
+    const bench = (Array.isArray(benchCloses) ? benchCloses : []).map(([ms, c]) => [msToDateStr(ms), c]);
+    return [...byMonth.values()]
+      .sort((a, b) => a.month.localeCompare(b.month))
+      .map((m) => {
+        let base = null;
+        let first = null;
+        let last = null;
+        for (const [d, c] of bench) {
+          if (d.slice(0, 7) < m.month) base = c;
+          else if (d.slice(0, 7) === m.month) {
+            if (first == null) first = c;
+            last = c;
+          }
+        }
+        if (base == null) base = first;
+        const benchPct = base != null && last != null && base > 0 ? (last - base) / base : null;
+        return {
+          month: m.month,
+          flow: m.flow,
+          dividends: m.dividends,
+          pnl: m.pnl,
+          twr: m.hasPct ? m.growth - 1 : null,
+          benchPct,
+        };
+      });
+  }
+
   // XIRR 年化報酬率：買入為負現金流、賣出/配息為正、期末市值（today 當日）為正，二分法解 NPV=0
   function computeXirr({ rows, stocks, transactions, quotes, today }) {
     if (!rows.length || rows.some((r) => r.valueTWD == null)) return null;
     const totalValue = rows.reduce((s, r) => s + r.valueTWD, 0);
     const flows = [];
     for (const t of transactions) {
+      if (t.kind === 'split') continue; // 分割無現金流
       const stock = stocks.find((s) => s.id === t.stockId);
       if (!stock) continue;
       const fx = fxRateOf(stock.currency, quotes);
@@ -296,8 +463,12 @@
   return {
     fxSymbolOf,
     fxRateOf,
+    eventKey,
     computeStock,
     computeDailySeries,
+    computeMonthlyReport,
     computeXirr,
+    detectUnappliedSplits,
+    detectUnrecordedDividends,
   };
 });
