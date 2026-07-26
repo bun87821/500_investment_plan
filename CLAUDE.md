@@ -12,8 +12,11 @@ npm test     # API 測試（node:test）＋ Playwright 端對端測試
 
 ## 架構速覽
 
-- `server.js` — 全部後端：Express 路由、Google 登入、Postgres/JSON 儲存、Yahoo Finance 報價代理、歷史回推
-- `public/` — 前端（`index.html` + `app.js` + `style.css`），無框架、無打包
+- `server.js` — 全部後端：Express 路由、Google 登入、Postgres/JSON 儲存、Yahoo Finance 報價／歷史／事件代理
+- `public/` — 前端，無框架、無打包
+  - `index.html` + `app.js` + `style.css` — 畫面與互動
+  - `portfolio-math.js` — 前後端共用的計算模組（平均成本、分割重放、XIRR、歷史回推、月報、提醒偵測）
+  - `manifest.json` + `sw.js` + `icon-*.png` — PWA（可安裝、離線唯讀）
 - `tests/` — `api.test.js`（API）、`e2e.test.js`（Playwright）、`helpers.js`
 - 領域詞彙見 `CONTEXT.md`；架構決策紀錄放 `docs/adr/`
 

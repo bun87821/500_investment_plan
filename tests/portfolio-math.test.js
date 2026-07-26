@@ -219,11 +219,34 @@ test('detectUnappliedSplits：未套用→回報；已套用/已忽略/早於首
     0
   );
 
-  // 分割日早於第一筆買入 → 與持股無關
+  // 分割日早於第一筆買入 → 當天沒有股數，與這個計畫無關
   assert.equal(
     PM.detectUnappliedSplits({ stock: TW_STOCK, transactions: [buy], splits: [[D(2025, 6, 1), 2, 1]], ignored: [] }).length,
     0
   );
+});
+
+test('detectUnappliedSplits：分割前已全數賣出→不提醒；比例不符的分割紀錄→仍提醒', () => {
+  const buy = { stockId: 'aaa', date: '2026-01-05', shares: 10, price: 1000 };
+  const splitEvent = [D(2026, 2, 1), 10, 1];
+
+  // 分割前已全數賣出 → 當天股數 0，不該再提醒
+  const sellAll = { stockId: 'aaa', date: '2026-01-20', shares: -10, price: 1100 };
+  assert.equal(
+    PM.detectUnappliedSplits({ stock: TW_STOCK, transactions: [buy, sellAll], splits: [splitEvent], ignored: [] }).length,
+    0
+  );
+
+  // 已有一筆 2:1 紀錄（比例不符）→ 那是另一次分割，10:1 仍要提醒
+  const wrongRatio = { stockId: 'aaa', date: '2026-02-02', kind: 'split', ratio: 2 };
+  const found = PM.detectUnappliedSplits({
+    stock: TW_STOCK,
+    transactions: [buy, wrongRatio],
+    splits: [splitEvent],
+    ignored: [],
+  });
+  assert.equal(found.length, 1);
+  assert.equal(found[0].ratio, 10);
 });
 
 test('detectUnrecordedDividends：未記帳→回報估算；30 天內已記/無股數/已忽略→不回報', () => {
@@ -472,6 +495,50 @@ test('computeMonthlyReport：兩個月手算案例（投入、配息、損益、
   assert.equal(feb.pnl, 156);
   assert.ok(Math.abs(feb.twr - 156 / 2120) < 1e-12); // (1+0)(1+156/2120)−1
   assert.ok(Math.abs(feb.benchPct - 0.05) < 1e-12); // 102 → 107.1，5.1/102
+});
+
+test('computeMonthlyReport：當月無交易時投入與配息為 0，仍計算 TWR', () => {
+  const series = [
+    { date: '2026-01-05', value: 1000, invested: 1000, flow: 1000, dividendToday: 0, dPnl: null, dPct: null },
+    { date: '2026-02-10', value: 1100, invested: 1000, flow: 0, dividendToday: 0, dPnl: 100, dPct: 0.1 },
+    { date: '2026-02-20', value: 1210, invested: 1000, flow: 0, dividendToday: 0, dPnl: 110, dPct: 0.1 },
+  ];
+  const rows = PM.computeMonthlyReport({ series, benchCloses: [] });
+  const feb = rows[1];
+  assert.equal(feb.month, '2026-02');
+  assert.equal(feb.flow, 0);
+  assert.equal(feb.dividends, 0);
+  assert.equal(feb.pnl, 210);
+  assert.ok(Math.abs(feb.twr - 0.21) < 1e-12); // 1.1 × 1.1 − 1
+});
+
+test('computeDailySeries：配息記在休市日，仍計入下一個交易日的當日損益（回歸）', () => {
+  // 歷史序列只有 01-05 與 01-07（01-06 休市）；配息 100 記在 01-06
+  const txs = [
+    { stockId: 'aaa', date: '2026-01-05', shares: 10, price: 100 },
+    { stockId: 'aaa', date: '2026-01-06', kind: 'dividend', twdCost: 100 },
+  ];
+  const hist = {
+    series: {
+      'AAA.TW': [
+        [D(2026, 1, 5), 100],
+        [D(2026, 1, 7), 100],
+      ],
+    },
+  };
+  const out = PM.computeDailySeries({
+    history: hist,
+    stocks: [TW_STOCK],
+    transactions: txs,
+    quotes: {},
+    budget: 0,
+    benchSymbol: '0050.TW',
+    today: '2026-02-01',
+  });
+  const last = out[out.length - 1];
+  assert.equal(last.date, '2026-01-07');
+  assert.equal(last.dividendToday, 100); // 不得因為 01-06 沒有資料點而被丟棄
+  assert.equal(last.dPnl, 100); // 市值持平（1000→1000），損益全來自配息
 });
 
 test('computeMonthlyReport：無序列 → 空陣列；無 0050 資料 → benchPct null', () => {

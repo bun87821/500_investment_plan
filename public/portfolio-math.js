@@ -104,26 +104,62 @@
     return new Date(ms).toISOString().slice(0, 10);
   }
 
-  // 找出「分割日在首筆買入之後、且尚未套用（無 7 天內的 split 交易）也未忽略」的分割事件
-  // splits：Yahoo 事件 [[ms, numerator, denominator], ...]；ignored：`split:<symbol>:<date>` 字串陣列
+  // 提醒的忽略鍵，格式見 CONTEXT.md：`split:<代號>:<日期>` / `div:<代號>:<日期>`
+  function eventKey(type, symbol, date) {
+    return type + ':' + symbol + ':' + date;
+  }
+
+  // 分割調整係數：把「date 當天的股數」換算成「所有更晚的分割都套用後」的股數。
+  // splitList 統一為 [[date, ratio], ...]，來源可為 Yahoo 事件或 kind:'split' 交易。
+  function splitFactorAfter(splitList, date) {
+    let factor = 1;
+    for (const [d, ratio] of splitList) if (d > date && ratio > 0) factor *= ratio;
+    return factor;
+  }
+
+  // Yahoo 分割事件 [[ms, numerator, denominator]] → [[date, ratio]]
+  function normalizeSplitEvents(splits) {
+    return (Array.isArray(splits) ? splits : [])
+      .map(([ms, numerator, denominator]) => [msToDateStr(ms), denominator > 0 ? numerator / denominator : 0])
+      .filter(([, ratio]) => ratio > 0);
+  }
+
+  // 分割日當天的股數（未套用任何分割前的原始口徑）
+  function rawSharesOn(sortedTxs, date) {
+    let s = 0;
+    for (const t of sortedTxs) {
+      if (t.kind === 'dividend' || t.kind === 'split') continue;
+      if (String(t.date) > date) break;
+      s += Number(t.shares) || 0;
+    }
+    return s;
+  }
+
+  // 找出「分割日當天仍有股數、且尚未套用（無 7 天內同比例的 split 紀錄）也未忽略」的分割事件
+  // splits：Yahoo 事件 [[ms, numerator, denominator], ...]；ignored：`split:<代號>:<日期>` 字串陣列
   function detectUnappliedSplits({ stock, transactions, splits, ignored }) {
     const list = Array.isArray(splits) ? splits : [];
     if (!list.length) return [];
-    const mine = transactions.filter((t) => t.stockId === stock.id);
-    const buys = mine.filter((t) => t.kind !== 'split' && t.kind !== 'dividend' && (Number(t.shares) || 0) > 0);
-    if (!buys.length) return [];
-    const firstBuy = buys.reduce((min, t) => (String(t.date) < min ? String(t.date) : min), '9999');
+    const mine = transactions
+      .filter((t) => t.stockId === stock.id)
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)));
     const splitTxs = mine.filter((t) => t.kind === 'split');
     const out = [];
     for (const [ms, numerator, denominator] of list) {
       const date = msToDateStr(ms);
-      if (date <= firstBuy) continue;
-      if ((ignored || []).includes('split:' + stock.symbol + ':' + date)) continue;
+      if ((ignored || []).includes(eventKey('split', stock.symbol, date))) continue;
       const ratio = denominator > 0 ? numerator / denominator : 0;
       if (!(ratio > 0) || ratio === 1) continue;
-      const applied = splitTxs.some((t) => Math.abs(new Date(String(t.date)).getTime() - ms) <= 7 * 86400_000);
+      // 分割當天沒有股數就與這個計畫無關（含分割前尚未買進、以及分割前已全數賣出）
+      if (!(rawSharesOn(mine, date) > 0)) continue;
+      // 已套用：7 天內有一筆比例相符的分割紀錄（比例不符表示是另一次分割，仍要提醒）
+      const applied = splitTxs.some(
+        (t) =>
+          Math.abs(new Date(String(t.date)).getTime() - ms) <= 7 * 86400_000 &&
+          Math.abs((Number(t.ratio) || 0) - ratio) < 1e-9
+      );
       if (applied) continue;
-      out.push({ stockId: stock.id, symbol: stock.symbol, date, ratio, numerator, denominator });
+      out.push({ stockId: stock.id, symbol: stock.symbol, date, ratio });
     }
     return out;
   }
@@ -133,31 +169,24 @@
   function detectUnrecordedDividends({ stock, transactions, dividends, splits, ignored }) {
     const evs = Array.isArray(dividends) ? dividends : [];
     if (!evs.length) return [];
-    const eventSplits = Array.isArray(splits) ? splits : [];
+    const eventSplits = normalizeSplitEvents(splits);
     const mine = transactions
       .filter((t) => t.stockId === stock.id)
       .sort((a, b) => String(a.date).localeCompare(String(b.date)));
     const divTxs = mine.filter((t) => t.kind === 'dividend');
-    const factorAfter = (date) => {
-      let f = 1;
-      for (const [ms, num, den] of eventSplits) {
-        if (msToDateStr(ms) > date && den > 0 && num / den > 0) f *= num / den;
-      }
-      return f;
-    };
     const sharesAdjOn = (date) => {
       let s = 0;
       for (const t of mine) {
         if (t.kind === 'dividend' || t.kind === 'split') continue;
         if (String(t.date) > date) break;
-        s += (Number(t.shares) || 0) * factorAfter(String(t.date));
+        s += (Number(t.shares) || 0) * splitFactorAfter(eventSplits, String(t.date));
       }
       return s;
     };
     const out = [];
     for (const [ms, perShare] of evs) {
       const date = msToDateStr(ms);
-      if ((ignored || []).includes('div:' + stock.symbol + ':' + date)) continue;
+      if ((ignored || []).includes(eventKey('div', stock.symbol, date))) continue;
       const shares = sharesAdjOn(date);
       if (!(shares > 0)) continue;
       const recorded = divTxs.some((t) => {
@@ -267,11 +296,13 @@
     for (const date of dates) {
       let flow = 0;
       let dividendToday = 0;
+      // 每筆交易只會被消化一次，因此消化到的配息就屬於「上一個資料點到今天」這段區間；
+      // 不能只認 t.date === date，否則記在週末／休市日的配息會被整筆丟棄。
       while (ti < txs.length && txs[ti].date <= date) {
         const t = txs[ti++];
         const r = consumeTx(t, date);
         flow += r.flow;
-        if (t.date === date) dividendToday += r.dividend;
+        dividendToday += r.dividend;
       }
       let value = 0;
       let ok = true;
@@ -311,7 +342,7 @@
           const t = txs[ti++];
           const r = consumeTx(t, today);
           flow += r.flow;
-          if (t.date === today) dividendToday += r.dividend;
+          dividendToday += r.dividend;
         }
         const benchQuote = quotes[benchSymbol]?.price ?? (benchOk ? benchFF(today) : null);
         out.push({
@@ -432,6 +463,7 @@
   return {
     fxSymbolOf,
     fxRateOf,
+    eventKey,
     computeStock,
     computeDailySeries,
     computeMonthlyReport,

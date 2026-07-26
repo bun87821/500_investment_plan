@@ -274,6 +274,8 @@ app.put('/api/portfolio', async (req, res) => {
 });
 
 // ---- 報價代理（Yahoo Finance）----
+// YAHOO_CHART_BASE 可指向測試替身，讓快取行為能在測試中驗證；正式環境用預設值
+const YAHOO_CHART_BASE = process.env.YAHOO_CHART_BASE || 'https://query1.finance.yahoo.com';
 const quoteCache = new Map(); // symbol -> { at, data }
 const CACHE_MS = 60 * 1000;
 
@@ -281,7 +283,7 @@ async function fetchQuote(symbol) {
   const cached = quoteCache.get(symbol);
   if (cached && Date.now() - cached.at < CACHE_MS) return cached.data;
 
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d`;
+  const url = `${YAHOO_CHART_BASE}/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d`;
   const resp = await fetch(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (portfolio-tracker)' },
   });
@@ -493,7 +495,7 @@ async function fetchHistory(symbol, range) {
   const cached = histCache.get(key);
   if (cached && Date.now() - cached.at < HIST_CACHE_MS) return cached.data;
 
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=1d`;
+  const url = `${YAHOO_CHART_BASE}/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=1d`;
   const resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (portfolio-tracker)' } });
   if (!resp.ok) throw new Error(`Yahoo 回應 ${resp.status}`);
   const json = await resp.json();
@@ -537,18 +539,21 @@ async function fetchEvents(symbol) {
   const cached = eventsCache.get(symbol);
   if (cached && Date.now() - cached.at < EVENTS_CACHE_MS) return cached.data;
 
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=max&interval=1d&events=div%2Csplit`;
+  const url = `${YAHOO_CHART_BASE}/v8/finance/chart/${encodeURIComponent(symbol)}?range=max&interval=1d&events=div%2Csplit`;
   const resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (portfolio-tracker)' } });
   if (!resp.ok) throw new Error(`Yahoo 回應 ${resp.status}`);
   const json = await resp.json();
   const events = json?.chart?.result?.[0]?.events || {};
+  // 一律轉成數字：下游把這些值直接餵給計算與格式化，不能讓字串混進來
   const dividends = Object.values(events.dividends || {})
     .filter((d) => d.date != null && d.amount != null)
-    .map((d) => [d.date * 1000, d.amount])
+    .map((d) => [Number(d.date) * 1000, Number(d.amount)])
+    .filter(([ms, amount]) => Number.isFinite(ms) && Number.isFinite(amount))
     .sort((a, b) => a[0] - b[0]);
   const splits = Object.values(events.splits || {})
     .filter((s) => s.date != null && s.numerator != null && s.denominator != null)
-    .map((s) => [s.date * 1000, s.numerator, s.denominator])
+    .map((s) => [Number(s.date) * 1000, Number(s.numerator), Number(s.denominator)])
+    .filter((row) => row.every((v) => Number.isFinite(v)))
     .sort((a, b) => a[0] - b[0]);
   const data = { dividends, splits };
   eventsCache.set(symbol, { at: Date.now(), data });

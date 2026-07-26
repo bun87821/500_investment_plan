@@ -295,7 +295,7 @@ function renderAlerts() {
   for (const a of alerts) {
     const div = document.createElement('div');
     div.className = 'notice alert-banner';
-    const key = (a.type === 'split' ? 'split:' : 'div:') + a.stock.symbol + ':' + a.date;
+    const key = PortfolioMath.eventKey(a.type, a.stock.symbol, a.date);
     if (a.type === 'split') {
       div.innerHTML = `📢 <b>${esc(a.stock.name)}</b> 於 ${esc(a.date)} 股票分割 1→${fmtNum(a.ratio, 4)}，你的交易紀錄尚未調整。
         <span class="alert-actions"><button class="alert-apply">套用分割</button><button class="alert-ignore">忽略</button></span>`;
@@ -315,7 +315,7 @@ function renderAlerts() {
     } else {
       div.innerHTML = `💰 <b>${esc(a.stock.name)}</b> 於 ${esc(a.date)} 除息，每股 ${fmtNum(a.perShare, 4)} ${esc(
         a.stock.currency
-      )}（當時 ${fmtNum(a.shares, 2)} 股，估 ${fmtNum(a.estimatedAmount, 2)} ${esc(a.stock.currency)}），尚未記帳。
+      )}（分割調整後 ${fmtNum(a.shares, 2)} 股，估 ${fmtNum(a.estimatedAmount, 2)} ${esc(a.stock.currency)}），尚未記帳。
         <span class="alert-actions"><button class="alert-fill">帶入配息表單</button><button class="alert-ignore">忽略</button></span>`;
       div.querySelector('.alert-fill').addEventListener('click', () => {
         $('tx-kind').value = 'dividend';
@@ -1104,14 +1104,14 @@ function renderMonthlyReport() {
   for (const m of [...months].reverse()) {
     const tr = document.createElement('tr');
     tr.className = 'monthly-row';
-    const beat = m.twr != null && m.benchPct != null ? (m.twr >= m.benchPct ? ' ✓' : '') : '';
+    const beatsBenchmark = m.twr != null && m.benchPct != null && m.twr >= m.benchPct;
     tr.innerHTML = `
       <td>${esc(m.month)}</td>
       <td class="num">${m.flow ? fmtTWD(m.flow) : '—'}</td>
       <td class="num">${m.dividends ? fmtTWD(m.dividends) : '—'}</td>
       <td class="num ${pnlClass(m.pnl)}">${signed(m.pnl, (n) => fmtTWD(n))}</td>
       <td class="num ${pnlClass(m.twr ?? 0)}">${m.twr == null ? '—' : signed(m.twr, (n) => fmtPct(n, 2))}</td>
-      <td class="num">${m.benchPct == null ? '—' : signed(m.benchPct, (n) => fmtPct(n, 2)) + beat}</td>`;
+      <td class="num">${m.benchPct == null ? '—' : signed(m.benchPct, (n) => fmtPct(n, 2)) + (beatsBenchmark ? ' ✓' : '')}</td>`;
     tr.addEventListener('click', () => toggleMonthlyDetail(tr, m.month));
     body.appendChild(tr);
   }
@@ -1878,9 +1878,11 @@ async function enterApp() {
 }
 
 // ---------- PWA ----------
-// service worker 只在 https 註冊（正式站）：本機與端對端測試維持純網路，行為可預期。
+// service worker 在 https（正式站）與 localhost（本機驗證）註冊；
+// 端對端測試走 127.0.0.1，維持純網路，行為可預期。
 function registerServiceWorker() {
-  if (!('serviceWorker' in navigator) || location.protocol !== 'https:') return;
+  if (!('serviceWorker' in navigator)) return;
+  if (location.protocol !== 'https:' && location.hostname !== 'localhost') return;
   navigator.serviceWorker.register('sw.js').catch(() => {
     /* 註冊失敗不影響使用 */
   });

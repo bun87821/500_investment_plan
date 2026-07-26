@@ -1,6 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const http = require('node:http');
 const { startServer, signSession } = require('./helpers');
 
 test('單人模式：portfolio 讀寫與樂觀鎖', async (t) => {
@@ -158,4 +159,41 @@ test('事件端點：缺 symbols 回 400', async (t) => {
 
   assert.equal((await fetch(srv.url + '/api/events')).status, 400);
   assert.equal((await fetch(srv.url + '/api/events?symbols=')).status, 400);
+});
+
+test('事件端點：解析分割與配息、第二次請求走快取不重打上游', async (t) => {
+  // 以測試替身取代 Yahoo，並計算上游被打了幾次
+  let upstreamHits = 0;
+  const upstream = http.createServer((req, res) => {
+    upstreamHits++;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(
+      JSON.stringify({
+        chart: {
+          result: [
+            {
+              events: {
+                dividends: { '1': { date: 1772064000, amount: 4.5 } },
+                splits: { '2': { date: 1772668800, numerator: 10, denominator: 1 } },
+              },
+            },
+          ],
+        },
+      })
+    );
+  });
+  await new Promise((r) => upstream.listen(0, '127.0.0.1', r));
+  t.after(() => upstream.close());
+
+  const srv = await startServer({ YAHOO_CHART_BASE: `http://127.0.0.1:${upstream.address().port}` });
+  t.after(() => srv.stop());
+
+  const first = await (await fetch(srv.url + '/api/events?symbols=AAA.TW')).json();
+  assert.deepEqual(first.events['AAA.TW'].dividends, [[1772064000 * 1000, 4.5]]);
+  assert.deepEqual(first.events['AAA.TW'].splits, [[1772668800 * 1000, 10, 1]]);
+  assert.equal(upstreamHits, 1);
+
+  const second = await (await fetch(srv.url + '/api/events?symbols=AAA.TW')).json();
+  assert.deepEqual(second.events, first.events);
+  assert.equal(upstreamHits, 1, '第二次應命中快取，不重打上游');
 });
