@@ -83,6 +83,16 @@ GitHub Actions（`.github/workflows/ci.yml`）會在每次 push / PR 自動跑�
 
 啟用登入前既有的共用資料仍保留在資料庫的 `legacy` 列；原本使用該瀏覽器的人登入後，瀏覽器備份會自動同步到他的帳號。
 
+## AI 開發工作流（Agent Skills）
+
+本 repo 安裝了 [Matt Pocock 的 agent skills](https://github.com/mattpocock/skills)（`.claude/skills/`），在 Claude Code 中的建議流程：
+
+```
+/grill-me → /to-spec → /to-tickets → /implement（TDD）→ /code-review
+```
+
+完整說明（含深模組思維與 Superpowers 比較）見 [`docs/agents/workflow.md`](docs/agents/workflow.md)；領域詞彙表見 [`CONTEXT.md`](CONTEXT.md)。
+
 ## API
 
 - `GET /api/config` – 前端設定（是否啟用登入、Google Client ID）
