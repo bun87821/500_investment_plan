@@ -51,7 +51,7 @@ test('computeStock：交易順序依日期重放（亂序輸入結果相同）',
   assert.equal(r.realized, 7_500);
 });
 
-test('computeStock：賣超過持股（現行為：股數可為負、只移除既有成本）', () => {
+test('computeStock：賣出股數超過既有股數（現行為：股數可為負、只移除既有成本）', () => {
   // 買 100@10=1,000；賣 150@12：入帳 1,800，僅移除 100 股成本 1,000 → 已實現 +800、餘 -50 股、成本 0
   const txs = [
     { stockId: 'aaa', date: '2026-01-05', shares: 100, price: 10 },
@@ -103,7 +103,7 @@ test('computeStock：外幣缺匯率且無 twdCost → invested/realized/dividen
   assert.equal(r.fx, null);
 });
 
-test('computeStock：無持股且無報價 → 市值 0；有持股無報價 → 市值 null', () => {
+test('computeStock：股數為零且無報價 → 市值 0；股數大於零但無報價 → 市值 null', () => {
   const none = PM.computeStock(TW_STOCK, [], {}, 0);
   assert.equal(none.shares, 0);
   assert.equal(none.valueTWD, 0);
@@ -271,7 +271,7 @@ test('computeDailySeries：歷史沒有今天但有即時報價 → 補上今日
   assert.equal(last.dPnl, 300); // 2400 − 2100 − 0
 });
 
-test('computeDailySeries：無歷史資料或無交易 → null', () => {
+test('computeDailySeries：無歷史收盤價或無交易 → null', () => {
   assert.equal(PM.computeDailySeries(seriesArgs([])), null);
   assert.equal(
     PM.computeDailySeries({ ...seriesArgs([{ stockId: 'aaa', date: '2026-01-05', shares: 1, price: 1 }]), history: null }),
