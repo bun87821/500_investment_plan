@@ -113,3 +113,11 @@ test('報價與歷史端點：缺參數回 400', async (t) => {
   assert.equal((await fetch(srv.url + '/api/history?symbols=2330.TW&range=bogus')).status, 400);
   assert.equal((await fetch(srv.url + '/api/history?range=3mo')).status, 400);
 });
+
+test('事件端點：缺 symbols 回 400', async (t) => {
+  const srv = await startServer();
+  t.after(() => srv.stop());
+
+  assert.equal((await fetch(srv.url + '/api/events')).status, 400);
+  assert.equal((await fetch(srv.url + '/api/events?symbols=')).status, 400);
+});

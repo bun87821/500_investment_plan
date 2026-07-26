@@ -523,6 +523,50 @@ app.get('/api/history', async (req, res) => {
   res.json({ series, errors, fetchedAt: Date.now() });
 });
 
+// ---- 分割與配息事件代理（分割偵測、未記帳配息提醒用）----
+const eventsCache = new Map(); // symbol -> { at, data }
+const EVENTS_CACHE_MS = 6 * 60 * 60 * 1000;
+
+async function fetchEvents(symbol) {
+  const cached = eventsCache.get(symbol);
+  if (cached && Date.now() - cached.at < EVENTS_CACHE_MS) return cached.data;
+
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=max&interval=1d&events=div%2Csplit`;
+  const resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (portfolio-tracker)' } });
+  if (!resp.ok) throw new Error(`Yahoo 回應 ${resp.status}`);
+  const json = await resp.json();
+  const events = json?.chart?.result?.[0]?.events || {};
+  const dividends = Object.values(events.dividends || {})
+    .filter((d) => d.date != null && d.amount != null)
+    .map((d) => [d.date * 1000, d.amount])
+    .sort((a, b) => a[0] - b[0]);
+  const splits = Object.values(events.splits || {})
+    .filter((s) => s.date != null && s.numerator != null && s.denominator != null)
+    .map((s) => [s.date * 1000, s.numerator, s.denominator])
+    .sort((a, b) => a[0] - b[0]);
+  const data = { dividends, splits };
+  eventsCache.set(symbol, { at: Date.now(), data });
+  return data;
+}
+
+app.get('/api/events', async (req, res) => {
+  const symbols = String(req.query.symbols || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 60);
+  if (!symbols.length) return res.status(400).json({ error: '缺少 symbols 參數' });
+
+  const results = await Promise.allSettled(symbols.map(fetchEvents));
+  const events = {};
+  const errors = {};
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') events[symbols[i]] = r.value;
+    else errors[symbols[i]] = r.reason.message;
+  });
+  res.json({ events, errors, fetchedAt: Date.now() });
+});
+
 app.post('/api/snapshots/today', async (req, res) => {
   const user = requireUser(req, res);
   if (!user) return;
