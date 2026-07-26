@@ -55,7 +55,24 @@ test('PUT 驗證：不合法輸入回 400', async (t) => {
   const srv = await startServer();
   t.after(() => srv.stop());
 
-  for (const bad of [{}, { transactions: 'x' }, { transactions: [], budget: -1 }, { transactions: [], stocks: 'x' }]) {
+  // ignoredEvents：合法（字串陣列）可寫入並讀回
+  let res = await fetch(srv.url + '/api/portfolio', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ transactions: [], ignoredEvents: ['split:NVDA:2024-06-10'] }),
+  });
+  assert.equal(res.status, 200);
+  res = await fetch(srv.url + '/api/portfolio');
+  assert.deepEqual((await res.json()).ignoredEvents, ['split:NVDA:2024-06-10']);
+
+  for (const bad of [
+    {},
+    { transactions: 'x' },
+    { transactions: [], budget: -1 },
+    { transactions: [], stocks: 'x' },
+    { transactions: [], ignoredEvents: 'x' },
+    { transactions: [], ignoredEvents: [1, 2] },
+  ]) {
     const res = await fetch(srv.url + '/api/portfolio', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },

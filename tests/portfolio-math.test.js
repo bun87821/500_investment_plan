@@ -119,6 +119,165 @@ test('computeStock：日漲跌 dayChange = (現價−昨收)/昨收', () => {
   assert.ok(Math.abs(r.dayChange - 0.1) < 1e-12);
 });
 
+// ---------- kind:'split' 分割重放 ----------
+
+test('computeStock：分割後股數×比例、成本不變、均價÷比例（手算）', () => {
+  // 買 10@1,000＝10,000；分割 1→10 → 100 股、成本仍 10,000、原幣均價 100
+  // 再賣 50@120：入帳 6,000，移除成本 100×50（台幣均價 10,000/100）＝5,000 → 已實現 +1,000
+  const txs = [
+    { stockId: 'aaa', date: '2026-01-05', shares: 10, price: 1000 },
+    { stockId: 'aaa', date: '2026-02-01', kind: 'split', ratio: 10 },
+    { stockId: 'aaa', date: '2026-02-10', shares: -50, price: 120 },
+  ];
+  const r = PM.computeStock(TW_STOCK, txs, { 'AAA.TW': { price: 120 } }, 0);
+  assert.equal(r.shares, 50);
+  assert.equal(r.invested, 5_000);
+  assert.equal(r.avgCost, 100);
+  assert.equal(r.realized, 1_000);
+  assert.equal(r.valueTWD, 6_000);
+});
+
+test('computeXirr：split 交易不產生現金流（結果與無 split 相同）', () => {
+  const txs = [
+    { stockId: 'aaa', date: '2021-01-01', shares: 100, price: 10 },
+    { stockId: 'aaa', date: '2021-06-01', kind: 'split', ratio: 2 },
+  ];
+  const r = PM.computeXirr({
+    rows: [{ valueTWD: 1100 }],
+    stocks: [TW_STOCK],
+    transactions: txs,
+    quotes: { 'AAA.TW': { price: 1 } },
+    today: '2022-01-01',
+  });
+  assert.ok(Math.abs(r - 0.1) < 1e-6, `expect 0.1, got ${r}`);
+});
+
+test('computeDailySeries：分割期間市值連續（Yahoo 調整後收盤×調整後股數，手算）', () => {
+  // Yahoo 收盤為分割調整後：01-05→50、01-06→55、01-07→55（實際 01-05 收 100、01-06 收 110、01-07 分割 2:1 收 55）
+  // 買 10@100（入金 1,000）於 01-05；split 2:1 於 01-07
+  // 調整後股數＝10×2＝20：01-05 值 1,000、01-06 值 1,100、01-07 值 1,100（分割日不得出現假損益）
+  const txs = [
+    { stockId: 'aaa', date: '2026-01-05', shares: 10, price: 100 },
+    { stockId: 'aaa', date: '2026-01-07', kind: 'split', ratio: 2 },
+  ];
+  const hist = {
+    series: {
+      'AAA.TW': [
+        [D(2026, 1, 5), 50],
+        [D(2026, 1, 6), 55],
+        [D(2026, 1, 7), 55],
+      ],
+    },
+  };
+  const out = PM.computeDailySeries({
+    history: hist,
+    stocks: [TW_STOCK],
+    transactions: txs,
+    quotes: {},
+    budget: 0,
+    benchSymbol: '0050.TW',
+    today: '2026-02-01',
+  });
+  assert.deepEqual(
+    out.map((p) => [p.date, p.value, p.flow]),
+    [
+      ['2026-01-05', 1000, 1000],
+      ['2026-01-06', 1100, 0],
+      ['2026-01-07', 1100, 0],
+    ]
+  );
+  assert.equal(out[2].dPnl, 0); // 分割日無假損益
+});
+
+// ---------- 分割與配息偵測 ----------
+
+test('detectUnappliedSplits：未套用→回報；已套用/已忽略/早於首買→不回報', () => {
+  const buy = { stockId: 'aaa', date: '2026-01-05', shares: 10, price: 1000 };
+  const splitEvent = [D(2026, 2, 1), 10, 1]; // 2026-02-01 分割 10:1
+
+  // 未套用 → 回報 ratio 10
+  const found = PM.detectUnappliedSplits({ stock: TW_STOCK, transactions: [buy], splits: [splitEvent], ignored: [] });
+  assert.equal(found.length, 1);
+  assert.equal(found[0].date, '2026-02-01');
+  assert.equal(found[0].ratio, 10);
+
+  // 已有 7 天內的 split 交易 → 視為已套用
+  const applied = { stockId: 'aaa', date: '2026-02-03', kind: 'split', ratio: 10 };
+  assert.equal(
+    PM.detectUnappliedSplits({ stock: TW_STOCK, transactions: [buy, applied], splits: [splitEvent], ignored: [] }).length,
+    0
+  );
+
+  // 已忽略 → 不回報
+  assert.equal(
+    PM.detectUnappliedSplits({
+      stock: TW_STOCK,
+      transactions: [buy],
+      splits: [splitEvent],
+      ignored: ['split:AAA.TW:2026-02-01'],
+    }).length,
+    0
+  );
+
+  // 分割日早於第一筆買入 → 與持股無關
+  assert.equal(
+    PM.detectUnappliedSplits({ stock: TW_STOCK, transactions: [buy], splits: [[D(2025, 6, 1), 2, 1]], ignored: [] }).length,
+    0
+  );
+});
+
+test('detectUnrecordedDividends：未記帳→回報估算；30 天內已記/無股數/已忽略→不回報', () => {
+  const buy = { stockId: 'aaa', date: '2026-01-05', shares: 100, price: 500 };
+  const divEvent = [D(2026, 3, 10), 4.5]; // 2026-03-10 除息，每股 4.5
+
+  // 未記帳 → 估算 = 4.5 × 100 = 450（原幣）
+  const found = PM.detectUnrecordedDividends({ stock: TW_STOCK, transactions: [buy], dividends: [divEvent], ignored: [] });
+  assert.equal(found.length, 1);
+  assert.equal(found[0].date, '2026-03-10');
+  assert.equal(found[0].perShare, 4.5);
+  assert.equal(found[0].estimatedAmount, 450);
+
+  // 除息日後 30 天內已有配息交易 → 視為已記帳
+  const recorded = { stockId: 'aaa', date: '2026-03-25', kind: 'dividend', twdCost: 450 };
+  assert.equal(
+    PM.detectUnrecordedDividends({ stock: TW_STOCK, transactions: [buy, recorded], dividends: [divEvent], ignored: [] }).length,
+    0
+  );
+
+  // 除息日已無股數 → 不回報
+  const sellAll = { stockId: 'aaa', date: '2026-02-01', shares: -100, price: 550 };
+  assert.equal(
+    PM.detectUnrecordedDividends({ stock: TW_STOCK, transactions: [buy, sellAll], dividends: [divEvent], ignored: [] }).length,
+    0
+  );
+
+  // 已忽略 → 不回報
+  assert.equal(
+    PM.detectUnrecordedDividends({
+      stock: TW_STOCK,
+      transactions: [buy],
+      dividends: [divEvent],
+      ignored: ['div:AAA.TW:2026-03-10'],
+    }).length,
+    0
+  );
+});
+
+test('detectUnrecordedDividends：估算股數採分割調整後（每股金額為調整後口徑）', () => {
+  // 買 10 股，除息在後、分割（2:1）更在除息之後：
+  // Yahoo 的每股配息為調整後口徑 → 估算應用調整後股數 10×2＝20；每股 2.25 → 估 45
+  const txs = [{ stockId: 'aaa', date: '2026-01-05', shares: 10, price: 1000 }];
+  const found = PM.detectUnrecordedDividends({
+    stock: TW_STOCK,
+    transactions: txs,
+    dividends: [[D(2026, 2, 10), 2.25]],
+    splits: [[D(2026, 3, 1), 2, 1]],
+    ignored: [],
+  });
+  assert.equal(found.length, 1);
+  assert.equal(found[0].estimatedAmount, 45); // 2.25 × 20
+});
+
 // ---------- computeXirr（年化報酬率）----------
 // 期望值來自獨立來源：Microsoft Excel XIRR 函數文件範例，以及可解析驗證的精確構造案例。
 

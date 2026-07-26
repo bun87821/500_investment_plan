@@ -252,6 +252,12 @@ app.put('/api/portfolio', async (req, res) => {
     }
     doc.snapshots = body.snapshots;
   }
+  if (body.ignoredEvents !== undefined) {
+    if (!Array.isArray(body.ignoredEvents) || body.ignoredEvents.some((x) => typeof x !== 'string')) {
+      return res.status(400).json({ error: 'ignoredEvents 必須是字串陣列' });
+    }
+    doc.ignoredEvents = body.ignoredEvents;
+  }
   try {
     // 樂觀鎖：客戶端帶上讀取時的 rev，不符表示其他裝置已改過 → 409 附最新資料
     const expectedRev = body.rev === undefined ? null : Number(body.rev);
