@@ -1,4 +1,5 @@
 const express = require('express');
+const PortfolioMath = require('./public/portfolio-math.js');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -293,10 +294,7 @@ async function fetchQuote(symbol) {
   return data;
 }
 
-function fxSymbolOf(currency) {
-  if (currency === 'TWD') return null;
-  return currency === 'USD' ? 'TWD=X' : currency + 'TWD=X';
-}
+const fxSymbolOf = PortfolioMath.fxSymbolOf;
 
 function taipeiDateString(at = new Date()) {
   return new Intl.DateTimeFormat('sv-SE', {
@@ -326,56 +324,23 @@ function nextTaipeiTwoPmDelayMs(now = new Date()) {
   return targetTaipeiAsUtc - taipeiAsUtc;
 }
 
-// 與前端 computeStock 相同的平均成本法重放（invested＝持有部位成本；配息不影響持股）
+// 快照持股列：與前端共用 portfolio-math 的平均成本重放，只挑快照需要的欄位
 function computeSnapshotRows(doc, quotes) {
   const stocks = Array.isArray(doc.stocks) ? doc.stocks : [];
   const txs = Array.isArray(doc.transactions) ? doc.transactions : [];
   return stocks.map((stock) => {
-    const fxSym = fxSymbolOf(stock.currency);
-    const fx = fxSym ? quotes[fxSym]?.price ?? null : 1;
-    const quote = quotes[stock.symbol];
-    let shares = 0;
-    let costTWD = 0;
-    let investedKnown = true;
-
-    const mine = txs
-      .filter((x) => x.stockId === stock.id && x.kind !== 'dividend')
-      .sort((a, b) => String(a.date).localeCompare(String(b.date)));
-    for (const t of mine) {
-      const s = Number(t.shares) || 0;
-      const price = Number(t.price) || 0;
-      let flowTWD = null;
-      if (t.twdCost != null) flowTWD = Math.abs(Number(t.twdCost));
-      else if (fx != null) flowTWD = Math.abs(s) * price * fx;
-      else investedKnown = false;
-
-      if (s > 0) {
-        if (flowTWD != null) costTWD += flowTWD;
-        shares += s;
-      } else if (s < 0) {
-        const sell = -s;
-        const removed = Math.min(sell, Math.max(shares, 0));
-        const avgTWD = shares > 0 ? costTWD / shares : 0;
-        costTWD -= avgTWD * removed;
-        shares -= sell;
-      }
-    }
-
-    const price = quote?.price ?? null;
-    const valueTWD = price != null && fx != null ? shares * price * fx : shares === 0 ? 0 : null;
-    const invested = investedKnown ? costTWD : null;
-    const pnl = valueTWD != null && invested != null ? valueTWD - invested : null;
+    const r = PortfolioMath.computeStock(stock, txs, quotes, 0);
     return {
       id: stock.id,
       name: stock.name,
       symbol: stock.symbol,
       currency: stock.currency,
-      shares,
-      price,
-      fx,
-      invested,
-      valueTWD,
-      pnl,
+      shares: r.shares,
+      price: r.price,
+      fx: r.fx,
+      invested: r.invested,
+      valueTWD: r.valueTWD,
+      pnl: r.pnl,
     };
   });
 }
