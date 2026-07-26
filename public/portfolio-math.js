@@ -94,9 +94,56 @@
     };
   }
 
+  // XIRR 年化報酬率：買入為負現金流、賣出/配息為正、期末市值（today 當日）為正，二分法解 NPV=0
+  function computeXirr({ rows, stocks, transactions, quotes, today }) {
+    if (!rows.length || rows.some((r) => r.valueTWD == null)) return null;
+    const totalValue = rows.reduce((s, r) => s + r.valueTWD, 0);
+    const flows = [];
+    for (const t of transactions) {
+      const stock = stocks.find((s) => s.id === t.stockId);
+      if (!stock) continue;
+      const fx = fxRateOf(stock.currency, quotes);
+      if (t.kind === 'dividend') {
+        const amt = t.twdCost != null ? Number(t.twdCost) || 0 : fx != null ? (Number(t.amount) || 0) * fx : null;
+        if (amt == null) return null;
+        flows.push([t.date, amt]);
+        continue;
+      }
+      const s = Number(t.shares) || 0;
+      const amt = t.twdCost != null ? Math.abs(Number(t.twdCost)) : fx != null ? Math.abs(s) * (Number(t.price) || 0) * fx : null;
+      if (amt == null) return null;
+      flows.push([t.date, s > 0 ? -amt : amt]);
+    }
+    if (!flows.length) return null;
+    flows.push([today, totalValue]);
+    flows.sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+
+    const t0 = new Date(flows[0][0]).getTime();
+    const spanDays = (new Date(flows[flows.length - 1][0]).getTime() - t0) / 86400_000;
+    if (spanDays < 30) return null; // 期間太短，年化沒有意義
+    if (!flows.some(([, a]) => a < 0) || !flows.some(([, a]) => a > 0)) return null;
+
+    const npv = (r) =>
+      flows.reduce((sum, [d, a]) => sum + a / Math.pow(1 + r, (new Date(d).getTime() - t0) / 86400_000 / 365), 0);
+    let lo = -0.95;
+    let hi = 10;
+    let fLo = npv(lo);
+    if (fLo * npv(hi) > 0) return null;
+    for (let i = 0; i < 100; i++) {
+      const mid = (lo + hi) / 2;
+      if (fLo * npv(mid) <= 0) hi = mid;
+      else {
+        lo = mid;
+        fLo = npv(lo);
+      }
+    }
+    return (lo + hi) / 2;
+  }
+
   return {
     fxSymbolOf,
     fxRateOf,
     computeStock,
+    computeXirr,
   };
 });

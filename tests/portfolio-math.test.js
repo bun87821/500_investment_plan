@@ -118,3 +118,53 @@ test('computeStock：日漲跌 dayChange = (現價−昨收)/昨收', () => {
   const r = PM.computeStock(TW_STOCK, [], { 'AAA.TW': { price: 110, previousClose: 100 } }, 0);
   assert.ok(Math.abs(r.dayChange - 0.1) < 1e-12);
 });
+
+// ---------- computeXirr（年化報酬率）----------
+// 期望值來自獨立來源：Microsoft Excel XIRR 函數文件範例，以及可解析驗證的精確構造案例。
+
+const xirrArgs = (transactions, rows, today) => ({
+  rows,
+  stocks: [TW_STOCK],
+  transactions,
+  quotes: { 'AAA.TW': { price: 1 } },
+  today,
+});
+
+test('computeXirr：整年 +10%（-1000 → 一年後 1100）＝ 0.1', () => {
+  // 2021-01-01 買入 1,000；2022-01-01（相隔 365 天）市值 1,100 → (1+r)^1 = 1.1
+  const txs = [{ stockId: 'aaa', date: '2021-01-01', shares: 100, price: 10 }];
+  const r = PM.computeXirr(xirrArgs(txs, [{ valueTWD: 1100 }], '2022-01-01'));
+  assert.ok(Math.abs(r - 0.1) < 1e-6, `expect 0.1, got ${r}`);
+});
+
+test('computeXirr：Microsoft XIRR 文件範例 ≈ 0.373362535', () => {
+  // https://support.microsoft.com/en-us/office/xirr-function
+  // 金流：-10,000（2008-01-01）、+2,750（2008-03-01）、+4,250（2008-10-30）、
+  //       +3,250（2009-02-15）、+2,750（2009-04-01）→ XIRR = 0.373362535
+  const txs = [
+    { stockId: 'aaa', date: '2008-01-01', shares: 1000, price: 10, twdCost: 10_000 },
+    { stockId: 'aaa', date: '2008-03-01', shares: -100, price: 27.5, twdCost: 2_750 },
+    { stockId: 'aaa', date: '2008-10-30', shares: -100, price: 42.5, twdCost: 4_250 },
+    { stockId: 'aaa', date: '2009-02-15', shares: -100, price: 32.5, twdCost: 3_250 },
+  ];
+  const r = PM.computeXirr(xirrArgs(txs, [{ valueTWD: 2_750 }], '2009-04-01'));
+  assert.ok(Math.abs(r - 0.373362535) < 1e-6, `expect 0.373362535, got ${r}`);
+});
+
+test('computeXirr：配息為正現金流（精確構造 r=0.1）', () => {
+  // -1,000（2021-01-01）＋ 股利 550（2022-01-01）＋ 期末市值 605（2023-01-01）
+  // NPV(0.1) = -1000 + 550/1.1 + 605/1.21 = -1000 + 500 + 500 = 0（各段恰為 365 天）
+  const txs = [
+    { stockId: 'aaa', date: '2021-01-01', shares: 100, price: 10 },
+    { stockId: 'aaa', date: '2022-01-01', kind: 'dividend', twdCost: 550 },
+  ];
+  const r = PM.computeXirr(xirrArgs(txs, [{ valueTWD: 605 }], '2023-01-01'));
+  assert.ok(Math.abs(r - 0.1) < 1e-6, `expect 0.1, got ${r}`);
+});
+
+test('computeXirr：期間不足 30 天、市值缺漏、無交易 → null', () => {
+  const txs = [{ stockId: 'aaa', date: '2026-01-01', shares: 100, price: 10 }];
+  assert.equal(PM.computeXirr(xirrArgs(txs, [{ valueTWD: 1100 }], '2026-01-15')), null); // < 30 天
+  assert.equal(PM.computeXirr(xirrArgs(txs, [{ valueTWD: null }], '2027-01-01')), null); // 市值未知
+  assert.equal(PM.computeXirr(xirrArgs([], [{ valueTWD: 1100 }], '2027-01-01')), null); // 無金流
+});
