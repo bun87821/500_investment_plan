@@ -1877,8 +1877,29 @@ async function enterApp() {
   loadEvents(); // 分割與配息事件，背景載入，完成後顯示提醒橫幅
 }
 
+// ---------- PWA ----------
+// service worker 只在 https 註冊（正式站）：本機與端對端測試維持純網路，行為可預期。
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator) || location.protocol !== 'https:') return;
+  navigator.serviceWorker.register('sw.js').catch(() => {
+    /* 註冊失敗不影響使用 */
+  });
+}
+
+function watchOnlineStatus() {
+  const update = () => {
+    if (navigator.onLine) hideNotice();
+    else showNotice('目前離線，顯示的是最後一次載入的資料。');
+  };
+  window.addEventListener('online', update);
+  window.addEventListener('offline', update);
+  if (!navigator.onLine) update();
+}
+
 // ---------- 啟動 ----------
 (async function main() {
+  registerServiceWorker();
+  watchOnlineStatus();
   initForm();
   initEditor();
   $('logout-btn').addEventListener('click', async () => {

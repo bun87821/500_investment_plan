@@ -131,6 +131,27 @@ test('報價與歷史端點：缺參數回 400', async (t) => {
   assert.equal((await fetch(srv.url + '/api/history?range=3mo')).status, 400);
 });
 
+test('PWA：manifest 與 service worker 可取得且欄位齊全', async (t) => {
+  const srv = await startServer();
+  t.after(() => srv.stop());
+
+  const res = await fetch(srv.url + '/manifest.json');
+  assert.equal(res.status, 200);
+  const manifest = await res.json();
+  assert.equal(manifest.display, 'standalone');
+  assert.ok(manifest.name && manifest.short_name);
+  assert.ok(manifest.theme_color && manifest.background_color);
+  for (const size of ['192x192', '512x512']) {
+    assert.ok(manifest.icons.some((i) => i.sizes === size && i.type === 'image/png'), size + ' 圖示');
+  }
+  assert.ok(manifest.icons.some((i) => i.purpose === 'maskable'), 'maskable 圖示');
+
+  for (const icon of manifest.icons) {
+    assert.equal((await fetch(srv.url + '/' + icon.src)).status, 200, icon.src);
+  }
+  assert.equal((await fetch(srv.url + '/sw.js')).status, 200);
+});
+
 test('事件端點：缺 symbols 回 400', async (t) => {
   const srv = await startServer();
   t.after(() => srv.stop());
