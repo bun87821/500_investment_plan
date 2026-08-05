@@ -1144,6 +1144,12 @@ tfoot td {
   height: 24px;
   border-radius: 50%;
 }
+#logout-btn {
+  min-height: 28px;
+  padding: 3px 8px;
+  font-size: 0.78rem;
+  line-height: 1.2;
+}
 
 /* ---- 計畫分頁列 ---- */
 .plan-tabs {
@@ -1332,6 +1338,11 @@ tfoot td {
   .header-actions .fx-info,
   .header-actions .user-chip {
     width: 100%;
+  }
+  .header-actions #logout-btn {
+    width: auto;
+    min-height: 32px;
+    margin-left: auto;
   }
   .user-chip {
     border-left: none;
