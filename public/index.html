@@ -293,6 +293,11 @@
             <span id="tx-twd-caption">台幣總成本（選填）</span>
             <input type="text" id="tx-twd" inputmode="decimal" placeholder="留空則以即時匯率換算" />
           </label>
+          <div class="tx-plans-field" id="tx-plans-field">
+            <span class="tx-plans-caption">計畫</span>
+            <div class="tx-plans" id="tx-plans"></div>
+            <span class="hint" id="tx-plans-hint" hidden>勾選多個計畫時，同一筆金額會計入每個計畫的已投入成本。</span>
+          </div>
           <div class="tx-form-actions">
             <button type="submit" id="tx-submit" class="btn btn-primary">新增交易</button>
             <button type="button" id="tx-cancel-edit" class="btn" hidden>取消編輯</button>

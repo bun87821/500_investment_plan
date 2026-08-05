@@ -414,6 +414,7 @@ function todayTaipei() {
 // ---------- 計畫分頁 ----------
 
 function renderPlanTabs() {
+  if (!editingTxId) renderTxPlans(null);
   const list = $('plan-tab-list');
   list.innerHTML = '';
   for (const p of state.plans) {
@@ -462,6 +463,7 @@ function initPlans() {
     else closePlanCard();
   });
   $('plan-cancel').addEventListener('click', closePlanCard);
+  $('tx-plans').addEventListener('change', updateTxPlansHint);
   $('plan-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const name = $('plan-name').value.trim();
@@ -1263,8 +1265,33 @@ function updateTxKindUI() {
   $('tx-twd-caption').textContent = isDiv ? '台幣入帳金額（選填）' : '台幣總成本（選填）';
 }
 
+// 交易表單的計畫多選：預設勾選目前計畫，編輯既有交易時帶出它原本的歸屬
+function renderTxPlans(selected) {
+  const wrap = $('tx-plans');
+  const checked = new Set(selected && selected.length ? selected : [activePlan()?.id].filter(Boolean));
+  wrap.innerHTML = '';
+  for (const p of state.plans) {
+    const label = document.createElement('label');
+    label.className = 'tx-plan-option';
+    label.innerHTML = `<input type="checkbox" value="${esc(p.id)}"${checked.has(p.id) ? ' checked' : ''}> ${esc(p.name)}`;
+    wrap.appendChild(label);
+  }
+  // 只有一個計畫時勾選框沒有意義，整欄收起來
+  $('tx-plans-field').hidden = state.plans.length < 2;
+  updateTxPlansHint();
+}
+
+function selectedTxPlans() {
+  return [...document.querySelectorAll('#tx-plans input:checked')].map((el) => el.value);
+}
+
+function updateTxPlansHint() {
+  $('tx-plans-hint').hidden = selectedTxPlans().length < 2;
+}
+
 function resetTxForm() {
   editingTxId = null;
+  renderTxPlans(null);
   $('tx-shares').value = '';
   $('tx-price').value = '';
   $('tx-amount').value = '';
@@ -1286,6 +1313,7 @@ function startEditTx(id) {
   $('tx-price').value = t.kind === 'dividend' ? '' : t.price;
   $('tx-amount').value = t.kind === 'dividend' ? (t.amount ?? '') : '';
   $('tx-twd').value = t.twdCost ?? '';
+  renderTxPlans(t.plans);
   $('tx-submit').textContent = '更新交易';
   $('tx-cancel-edit').hidden = false;
   $('tx-form-title').textContent = '編輯交易';
@@ -1751,11 +1779,16 @@ function initForm() {
       record = { ...base, shares, price, twdCost };
     }
 
+    const plans = state.plans.length < 2 ? [activePlan().id] : selectedTxPlans();
+    if (!plans.length) {
+      alert('請至少勾選一個計畫');
+      return;
+    }
     if (editingTxId) {
       const idx = state.transactions.findIndex((t) => t.id === editingTxId);
-      if (idx >= 0) state.transactions[idx] = { ...state.transactions[idx], ...record, id: editingTxId };
+      if (idx >= 0) state.transactions[idx] = { ...state.transactions[idx], ...record, plans, id: editingTxId };
     } else {
-      state.transactions.push({ ...record, plans: [activePlan().id], id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6) });
+      state.transactions.push({ ...record, plans, id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6) });
     }
     await savePortfolio();
     resetTxForm();

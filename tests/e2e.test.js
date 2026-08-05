@@ -253,6 +253,31 @@ test('端對端：計畫分頁切換後數字跟著換，重新載入回到上�
   await page.waitForTimeout(500);
   assert.equal(await page.locator('#tx-body tr').count(), 1);
 
+  // --- 一筆交易掛多個計畫：兩個分頁都看得到 ---
+  const mainTxCount = await (async () => {
+    await page.click('.plan-tab:has-text("主要計畫")');
+    await page.waitForTimeout(300);
+    const n = await page.locator('#tx-body tr').count();
+    await page.click('.plan-tab:has-text("信貸")');
+    await page.waitForTimeout(300);
+    return n;
+  })();
+
+  await page.selectOption('#tx-stock', 'TSM');
+  await page.fill('#tx-shares', '10');
+  await page.fill('#tx-price', '230');
+  await page.locator('#tx-plans input').first().check(); // 也勾主要計畫
+  assert.ok(await page.locator('#tx-plans-hint').isVisible(), '勾選兩個計畫時應出現重複計入的提示');
+  await page.click('#tx-submit');
+  await page.waitForTimeout(500);
+  assert.equal(await page.locator('#tx-body tr').count(), 2, '信貸應看到這筆');
+
+  await page.click('.plan-tab:has-text("主要計畫")');
+  await page.waitForTimeout(400);
+  assert.equal(await page.locator('#tx-body tr').count(), mainTxCount + 1, '主要計畫也應看到同一筆');
+  await page.click('.plan-tab:has-text("信貸")');
+  await page.waitForTimeout(300);
+
   // --- 目標配置比例跟著計畫走 ---
   await page.click('#edit-stocks-btn');
   assert.ok((await page.textContent('#editor-percent-head')).includes('信貸'), '比例欄標題應標明目前計畫');
@@ -278,6 +303,8 @@ test('端對端：計畫分頁切換後數字跟著換，重新載入回到上�
   assert.equal(saved.plans[1].budget, 1_500_000);
   const added = saved.transactions.find((x) => x.shares === 50);
   assert.deepEqual(added.plans, ['plan-2']);
+  const shared = saved.transactions.find((x) => x.shares === 10 && x.stockId === 'TSM');
+  assert.deepEqual([...shared.plans].sort(), ['plan-1', 'plan-2']);
 
   assert.deepEqual(jsErrors, [], 'JS errors: ' + jsErrors.join('; '));
 });

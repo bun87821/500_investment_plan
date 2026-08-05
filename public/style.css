@@ -956,3 +956,16 @@ tfoot td {
   font-size: 0.9rem;
 }
 .plan-form-actions { display: flex; gap: 8px; }
+
+/* ---- 交易表單的計畫多選 ---- */
+.tx-plans-field { display: flex; flex-direction: column; gap: 4px; }
+.tx-plans-caption { font-size: 0.8rem; color: var(--text-secondary); }
+.tx-plans { display: flex; flex-wrap: wrap; gap: 10px; }
+.tx-plan-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
