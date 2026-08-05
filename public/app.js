@@ -1715,7 +1715,7 @@ function editorRow(s = { id: '', name: '', symbol: '', market: '台股', currenc
     <td><input class="e-market" value="${esc(s.market)}" placeholder="台股"></td>
     <td><input class="e-category" list="category-list" value="${esc(s.category || '')}" placeholder="如 記憶體"></td>
     <td><select class="e-currency">${currencyOptions}</select></td>
-    <td class="num"><input class="e-percent" type="text" inputmode="decimal" value="${Number(s.percent) || 0}"></td>
+    <td class="num e-percent-cell"><input class="e-percent" type="text" inputmode="decimal" value="${Number(s.percent) || 0}"></td>
     <td><button type="button" class="tx-del e-del" title="刪除標的">✕</button></td>`;
   return tr;
 }
@@ -1829,7 +1829,7 @@ function rebalanceEditorPercents() {
 function openEditor() {
   // 標的基本資料全帳號共用，比例只改目前計畫的目標配置 — 欄位標題標明是哪個計畫
   $('editor-percent-head').textContent = `目標％（${activePlan()?.name || ''}）`;
-  $('editor-percent-head').hidden = !hasTarget();
+  $('editor-card').classList.toggle('no-target', !hasTarget());
   $('edit-budget-field').hidden = !hasTarget();
   $('edit-budget').value = planBudget() ?? '';
   refreshCategoryDatalist();
@@ -1847,8 +1847,9 @@ function closeEditor() {
 }
 
 function saveEditor() {
+  // 純記錄型計畫沒有總預算欄，只有有目標的計畫才驗證它
   const budget = parseDecimalInput($('edit-budget').value);
-  if (!(budget > 0)) {
+  if (hasTarget() && !(budget > 0)) {
     alert('總預算必須是正數');
     return;
   }

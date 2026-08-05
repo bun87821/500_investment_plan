@@ -1016,3 +1016,11 @@ tfoot td {
   font-family: inherit;
   font-size: 0.9rem;
 }
+
+/* 純記錄型計畫（無總預算）：整個目標比例欄與 100% 相關控制項一起收起來 */
+#editor-card.no-target #editor-percent-head,
+#editor-card.no-target .e-percent-cell,
+#editor-card.no-target #editor-rebalance,
+#editor-card.no-target #editor-total {
+  display: none;
+}
