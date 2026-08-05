@@ -335,14 +335,18 @@ function renderAlerts() {
       div.innerHTML = `📢 <b>${esc(a.stock.name)}</b> 於 ${esc(a.date)} 股票分割 1→${fmtNum(a.ratio, 4)}，你的交易紀錄尚未調整。
         <span class="alert-actions"><button class="alert-apply">套用分割</button><button class="alert-ignore">忽略</button></span>`;
       div.querySelector('.alert-apply').addEventListener('click', async () => {
-        state.transactions.push({
-          id: 'split-' + a.stock.id + '-' + a.date,
-          stockId: a.stock.id,
-          date: a.date,
-          kind: 'split',
-          ratio: a.ratio,
-          plans: [activePlan().id],
-        });
+        // 分割是客觀事實：一次補齊每個在分割日持有這檔標的的計畫，不必逐個分頁重按
+        const holders = PortfolioMath.plansHoldingOn(state.plans, state.transactions, a.stock.id, a.date);
+        for (const planId of holders) {
+          state.transactions.push({
+            id: 'split-' + a.stock.id + '-' + a.date + '-' + planId,
+            stockId: a.stock.id,
+            date: a.date,
+            kind: 'split',
+            ratio: a.ratio,
+            plans: [planId],
+          });
+        }
         await savePortfolio();
         render();
         renderAlerts();
@@ -360,6 +364,7 @@ function renderAlerts() {
         $('tx-date').value = a.date;
         $('tx-amount').value = String(Math.round(a.estimatedAmount * 100) / 100);
         $('tx-twd').value = '';
+        renderTxPlans(PortfolioMath.plansHoldingOn(state.plans, state.transactions, a.stock.id, a.date));
         $('tx-form').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       });
     }
@@ -698,6 +703,7 @@ function snapshotFromRows(rows, source = 'manual') {
   const pnlPct = pnl != null && totalInvested > 0 ? pnl / totalInvested : null;
   return {
     date: todayTaipei(),
+    planId: activePlan()?.id ?? null,
     at: Date.now(),
     source,
     totalInvested,
@@ -720,8 +726,9 @@ function snapshotFromRows(rows, source = 'manual') {
   };
 }
 
+// 同一天同一個計畫只留一筆
 function upsertLocalSnapshot(snapshot) {
-  state.snapshots = [...state.snapshots.filter((s) => s.date !== snapshot.date), snapshot].sort((a, b) =>
+  state.snapshots = [...state.snapshots.filter((s) => !(s.date === snapshot.date && s.planId === snapshot.planId)), snapshot].sort((a, b) =>
     String(a.date).localeCompare(String(b.date))
   );
 }
@@ -2001,7 +2008,7 @@ function initForm() {
         const res = await fetch('/api/snapshots/today', { method: 'POST' });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || '記錄失敗');
-        upsertLocalSnapshot(data.snapshot);
+        for (const snap of data.snapshots || []) upsertLocalSnapshot(snap);
         if (data.rev !== undefined) state.rev = Number(data.rev) || state.rev; // 伺服器已寫入，同步版本號
         localStorage.setItem(backupKey(), JSON.stringify({
           plans: state.plans,

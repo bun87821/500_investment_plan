@@ -268,3 +268,36 @@ test('舊格式帳號資料寫入後回讀，帶有遷移結果', async (t) => {
   assert.deepEqual(body.transactions[0].plans, [body.plans[0].id]);
   assert.equal(body.snapshots[0].planId, body.plans[0].id);
 });
+
+test('記錄今日市值：每個計畫各存一筆快照', async (t) => {
+  const srv = await startServer();
+  t.after(() => srv.stop());
+
+  // 不放標的 → 不會打 Yahoo 取報價，但每個計畫仍應各記一筆
+  await fetch(srv.url + '/api/portfolio', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      transactions: [{ id: 't1', stockId: '2330', date: '2026-01-05', shares: 100, price: 1000, plans: ['p1'] }],
+      plans: [
+        { id: 'p1', name: '信貸', budget: 1_500_000 },
+        { id: 'p2', name: '退休', budget: 5_000_000 },
+      ],
+    }),
+  });
+
+  const res = await fetch(srv.url + '/api/snapshots/today', { method: 'POST' });
+  assert.equal(res.status, 200);
+  const { snapshots } = await res.json();
+  assert.deepEqual(snapshots.map((s) => s.planId), ['p1', 'p2']);
+  assert.equal(snapshots[0].date, snapshots[1].date);
+
+  const saved = await (await fetch(srv.url + '/api/portfolio')).json();
+  assert.equal(saved.snapshots.length, 2);
+  assert.deepEqual(saved.snapshots.map((s) => s.planId).sort(), ['p1', 'p2']);
+
+  // 同一天再記一次不會變成四筆
+  await fetch(srv.url + '/api/snapshots/today', { method: 'POST' });
+  const again = await (await fetch(srv.url + '/api/portfolio')).json();
+  assert.equal(again.snapshots.length, 2);
+});

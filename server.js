@@ -364,9 +364,8 @@ function nextTaipeiTwoPmDelayMs(now = new Date()) {
 }
 
 // 快照持股列：與前端共用 portfolio-math 的平均成本重放，只挑快照需要的欄位
-function computeSnapshotRows(doc, quotes) {
+function computeSnapshotRows(doc, quotes, txs) {
   const stocks = Array.isArray(doc.stocks) ? doc.stocks : [];
-  const txs = Array.isArray(doc.transactions) ? doc.transactions : [];
   return stocks.map((stock) => {
     const r = PortfolioMath.computeStock(stock, txs, quotes, 0);
     return {
@@ -384,7 +383,8 @@ function computeSnapshotRows(doc, quotes) {
   });
 }
 
-async function createSnapshotForDoc(doc, source = 'manual') {
+// 每個計畫各記一筆快照：報價只抓一次，之後依計畫篩過的交易分別重放
+async function createSnapshotsForDoc(doc, source = 'manual') {
   const stocks = Array.isArray(doc.stocks) ? doc.stocks : [];
   const fxSyms = [...new Set(stocks.map((s) => fxSymbolOf(s.currency)).filter(Boolean))];
   const symbols = [...new Set([...stocks.map((s) => s.symbol), ...fxSyms].filter(Boolean))];
@@ -396,44 +396,52 @@ async function createSnapshotForDoc(doc, source = 'manual') {
     else errors[symbols[i]] = r.reason.message;
   });
 
-  const holdings = computeSnapshotRows(doc, quotes);
-  const totalInvested = holdings.reduce((s, r) => s + (r.invested ?? 0), 0);
-  const anyValueMissing = holdings.some((r) => r.valueTWD == null);
-  const totalValue = anyValueMissing ? null : holdings.reduce((s, r) => s + r.valueTWD, 0);
-  const pnl = totalValue != null ? totalValue - totalInvested : null;
-  const pnlPct = pnl != null && totalInvested > 0 ? pnl / totalInvested : null;
-
-  return {
-    date: taipeiDateString(),
-    at: Date.now(),
-    source,
-    totalInvested,
-    totalValue,
-    pnl,
-    pnlPct,
-    holdings,
-    quoteErrors: errors,
-  };
+  const allTxs = Array.isArray(doc.transactions) ? doc.transactions : [];
+  const date = taipeiDateString();
+  const at = Date.now();
+  return (doc.plans || []).map((plan) => {
+    const holdings = computeSnapshotRows(doc, quotes, PortfolioMath.transactionsInPlan(allTxs, plan.id));
+    const totalInvested = holdings.reduce((s, r) => s + (r.invested ?? 0), 0);
+    const anyValueMissing = holdings.some((r) => r.valueTWD == null);
+    const totalValue = anyValueMissing ? null : holdings.reduce((s, r) => s + r.valueTWD, 0);
+    const pnl = totalValue != null ? totalValue - totalInvested : null;
+    const pnlPct = pnl != null && totalInvested > 0 ? pnl / totalInvested : null;
+    return {
+      date,
+      planId: plan.id,
+      at,
+      source,
+      totalInvested,
+      totalValue,
+      pnl,
+      pnlPct,
+      holdings,
+      quoteErrors: errors,
+    };
+  });
 }
 
-function upsertSnapshot(doc, snapshot) {
-  const snapshots = Array.isArray(doc.snapshots) ? doc.snapshots : [];
+// 同一天同一個計畫只留一筆
+function upsertSnapshots(doc, snapshots) {
+  const replaced = new Set(snapshots.map((s) => s.date + '|' + s.planId));
+  const kept = (Array.isArray(doc.snapshots) ? doc.snapshots : []).filter(
+    (s) => !replaced.has(s.date + '|' + s.planId)
+  );
   return {
     ...doc,
-    snapshots: [...snapshots.filter((s) => s.date !== snapshot.date), snapshot].sort((a, b) =>
-      String(a.date).localeCompare(String(b.date))
-    ),
+    snapshots: [...kept, ...snapshots].sort((a, b) => String(a.date).localeCompare(String(b.date))),
   };
 }
 
 async function recordSnapshotForUser(userId, source = 'manual') {
   // 帶樂觀鎖的讀-改-寫；撞到其他寫入就重讀重試一次
   for (let attempt = 0; attempt < 2; attempt++) {
-    const { doc, rev } = await readDoc(userId);
-    const snapshot = await createSnapshotForDoc(doc, source);
+    const { doc: raw, rev } = await readDoc(userId);
+    const doc = PortfolioMath.migratePortfolio(raw);
+    const snapshots = await createSnapshotsForDoc(doc, source);
     try {
-      const newRev = await writeDoc(userId, upsertSnapshot(doc, snapshot), rev);
-      return { snapshot, rev: newRev };
+      const newRev = await writeDoc(userId, upsertSnapshots(doc, snapshots), rev);
+      return { snapshots, rev: newRev };
     } catch (err) {
       if (!(err instanceof ConflictError) || attempt === 1) throw err;
     }
@@ -613,8 +621,8 @@ app.post('/api/snapshots/today', async (req, res) => {
   const user = requireUser(req, res);
   if (!user) return;
   try {
-    const { snapshot, rev } = await recordSnapshotForUser(user.sub, 'manual');
-    res.json({ snapshot, rev });
+    const { snapshots, rev } = await recordSnapshotForUser(user.sub, 'manual');
+    res.json({ snapshots, rev });
   } catch (err) {
     console.error('記錄市值快照失敗：', err.message);
     res.status(500).json({ error: '記錄市值快照失敗' });

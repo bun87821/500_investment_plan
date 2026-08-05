@@ -761,3 +761,19 @@ test('copyTransactionsToPlan：複製為獨立副本（新 id、只掛新計畫�
   assert.deepEqual(txs[0].plans, ['credit']);
   assert.deepEqual(txs[1].plans, ['credit', 'retire']);
 });
+
+// ---------- 多計畫：某日持有該標的的計畫 ----------
+
+test('plansHoldingOn：分割日／除息日當天持有該標的的計畫才需要處理', () => {
+  const plans = [{ id: 'credit' }, { id: 'retire' }, { id: 'empty' }];
+  const txs = [
+    { stockId: 'aaa', date: '2026-01-01', shares: 100, price: 10, plans: ['credit'] },
+    { stockId: 'aaa', date: '2026-02-15', shares: -100, price: 12, plans: ['credit'] }, // 信貸在 2/15 出清
+    { stockId: 'aaa', date: '2026-03-01', shares: 50, price: 11, plans: ['retire'] },
+    { stockId: 'bbb', date: '2026-01-01', shares: 10, price: 5, plans: ['empty'] }, // 別檔標的不算
+  ];
+  assert.deepEqual(PM.plansHoldingOn(plans, txs, 'aaa', '2026-02-01'), ['credit']);
+  assert.deepEqual(PM.plansHoldingOn(plans, txs, '2026-02-20' && 'aaa', '2026-02-20'), []); // 信貸已出清、退休還沒買
+  assert.deepEqual(PM.plansHoldingOn(plans, txs, 'aaa', '2026-03-01'), ['retire']);
+  assert.deepEqual(PM.plansHoldingOn(plans, txs, 'bbb', '2026-01-01'), ['empty']);
+});

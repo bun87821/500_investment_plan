@@ -198,6 +198,19 @@
     return s;
   }
 
+  // 某日仍持有該標的的計畫——分割要對每個這樣的計畫各補一筆調整紀錄，
+  // 未記帳配息的表單也預設勾選這些計畫
+  function plansHoldingOn(plans, transactions, stockId, date) {
+    return (Array.isArray(plans) ? plans : [])
+      .filter((p) => {
+        const mine = transactionsInPlan(transactions, p.id)
+          .filter((t) => t.stockId === stockId)
+          .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+        return rawSharesOn(mine, date) > 0;
+      })
+      .map((p) => p.id);
+  }
+
   // 找出「分割日當天仍有股數、且尚未套用（無 7 天內同比例的 split 紀錄）也未忽略」的分割事件
   // splits：Yahoo 事件 [[ms, numerator, denominator], ...]；ignored：`split:<代號>:<日期>` 字串陣列
   function detectUnappliedSplits({ stock, transactions, splits, ignored }) {
@@ -532,6 +545,7 @@
     transactionsInPlan,
     transactionsOnlyInPlan,
     copyTransactionsToPlan,
+    plansHoldingOn,
     removePlan,
     computeStock,
     computeDailySeries,
