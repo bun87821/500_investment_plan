@@ -22,6 +22,8 @@ const DEFAULT_STOCKS = [
   { id: '3037', name: '欣興', symbol: '3037.TW', market: '台股', currency: 'TWD', category: 'PCB/載板', percent: 2 },
   { id: '3653', name: '健策', symbol: '3653.TW', market: '台灣', currency: 'TWD', category: '散熱', percent: 0 },
   { id: '5009', name: '榮剛', symbol: '5009.TWO', market: '台北', currency: 'TWD', category: '傳產', percent: 0 },
+  { id: '6770', name: '力積電', symbol: '6770.TW', market: '台灣', currency: 'TWD', category: '半導體', percent: 0 },
+  { id: '00929', name: '復華台灣科技優息', symbol: '00929.TW', market: '台灣', currency: 'TWD', category: '大盤', percent: 0 },
   { id: '6788', name: '華景電', symbol: '6788.TWO', market: '台北', currency: 'TWD', category: '廠務', percent: 0 },
 ];
 
@@ -1580,10 +1582,11 @@ function parseCsvLine(line) {
 
 const CSV_HEADERS = {
   date: ['date', '日期'],
-  stock: ['stock', 'symbol', 'ticker', '標的', '代號', '股票'],
-  shares: ['shares', 'qty', '股數'],
-  price: ['price', '價格', '每股價格', '成交價'],
-  twd: ['twd', 'twdcost', '台幣', '台幣成本', '台幣總成本'],
+  stock: ['stock', 'symbol', 'ticker', '標的', '代號', '股票', '股名'],
+  shares: ['shares', 'qty', '股數', '成交股數'],
+  price: ['price', '價格', '每股價格', '成交價', '成交單價'],
+  twd: ['twd', 'twdcost', '台幣', '台幣成本', '台幣總成本', '淨收付'],
+  net: ['淨收付'],
   kind: ['kind', 'type', '類型'],
 };
 
@@ -1598,13 +1601,25 @@ function findStockByText(text) {
   );
 }
 
+function parseCsvNumber(value) {
+  const normalized = String(value ?? '').trim().replace(/,/g, '');
+  return normalized === '' ? NaN : parseFloat(normalized);
+}
+
+function normalizeCsvDate(value) {
+  const parts = String(value ?? '').trim().replace(/\//g, '-').split('-');
+  if (parts.length !== 3) return '';
+  const [y, m, d] = parts;
+  return `${y.padStart(4, '0')}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+}
+
 async function importCsv(text) {
-  const lines = text.split(/\r?\n/).filter((l) => l.trim() !== '');
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter((l) => l.trim() !== '');
   if (!lines.length) throw new Error('CSV 是空的');
 
   let rows = lines.map(parseCsvLine);
   // 有標題列 → 依標題對應欄位；否則用預設順序
-  let col = { date: 0, stock: 1, shares: 2, price: 3, twd: 4, kind: 5 };
+  let col = { date: 0, stock: 1, shares: 2, price: 3, twd: 4, kind: 5, net: null };
   const first = rows[0].map((c) => c.toLowerCase());
   const hasHeader = Object.values(CSV_HEADERS).some((names) => names.some((n) => first.includes(n)));
   if (hasHeader) {
@@ -1619,14 +1634,16 @@ async function importCsv(text) {
   const failed = [];
   for (const [i, cells] of rows.entries()) {
     const rowNo = i + 1 + (hasHeader ? 1 : 0);
-    const dateRaw = (cells[col.date] || '').replace(/\//g, '-');
+    const dateRaw = normalizeCsvDate(cells[col.date]);
     const stock = findStockByText(cells[col.stock] || '');
     const kindRaw = (cells[col.kind] || '').toLowerCase();
     const isDiv = ['dividend', 'div', '息', '配息', '股利'].includes(kindRaw);
-    const priceVal = parseDecimalInput(cells[col.price]);
-    const sharesVal = parseDecimalInput(cells[col.shares]);
+    const priceVal = parseCsvNumber(cells[col.price]);
+    const rawShares = parseCsvNumber(cells[col.shares]);
+    const netVal = col.net == null ? NaN : parseCsvNumber(cells[col.net]);
+    const sharesVal = !Number.isNaN(netVal) && netVal > 0 ? -Math.abs(rawShares) : rawShares;
     const twdRaw = cells[col.twd] || '';
-    const twdCost = twdRaw === '' ? null : Math.abs(parseDecimalInput(twdRaw)) || null;
+    const twdCost = twdRaw === '' ? null : Math.abs(parseCsvNumber(twdRaw)) || null;
 
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateRaw) || !stock) {
       failed.push(`第 ${rowNo} 列（${cells.join(',').slice(0, 40)}）`);
