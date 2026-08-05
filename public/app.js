@@ -416,10 +416,28 @@ function collectAlerts() {
   return alerts;
 }
 
+async function ignoreAllDividendAlerts(alerts = collectAlerts()) {
+  const keys = alerts
+    .filter((a) => a.type === 'div')
+    .map((a) => PortfolioMath.eventKey(a.type, a.stock.symbol, a.date));
+  if (!keys.length) return;
+  state.ignoredEvents = [...new Set([...state.ignoredEvents, ...keys])];
+  await savePortfolio();
+  renderAlerts();
+}
+
 function renderAlerts() {
   const box = $('alerts');
   const alerts = collectAlerts();
   box.innerHTML = '';
+  const dividendAlerts = alerts.filter((a) => a.type === 'div');
+  if (dividendAlerts.length) {
+    const toolbar = document.createElement('div');
+    toolbar.className = 'alert-toolbar';
+    toolbar.innerHTML = `<span>配息提醒 ${dividendAlerts.length} 筆</span><button type="button" class="alert-ignore-divs">忽略全部配息</button>`;
+    toolbar.querySelector('.alert-ignore-divs').addEventListener('click', () => ignoreAllDividendAlerts(alerts));
+    box.appendChild(toolbar);
+  }
   for (const a of alerts) {
     const div = document.createElement('div');
     div.className = 'notice alert-banner';

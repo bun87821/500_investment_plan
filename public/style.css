@@ -952,8 +952,18 @@ tfoot td {
 .chip-kind.split { color: var(--series-2, #b58900); }
 
 /* 分割／配息提醒橫幅 */
+.alert-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-bottom: 8px;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+}
 .alert-banner { display: block; margin-bottom: 8px; }
 .alert-actions { margin-left: 8px; white-space: nowrap; }
+.alert-toolbar button,
 .alert-actions button {
   margin-left: 6px;
   padding: 2px 10px;
@@ -964,6 +974,11 @@ tfoot td {
   color: inherit;
   cursor: pointer;
 }
+.alert-toolbar button {
+  min-height: 36px;
+  margin-left: 0;
+}
+.alert-toolbar button:hover,
 .alert-actions button:hover { border-color: var(--accent, #888); }
 
 /* 月報 */

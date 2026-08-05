@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+const appJs = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
 
 test('主要卡片區塊標記為可收合', () => {
   for (const id of [
@@ -24,4 +25,12 @@ test('主要卡片區塊標記為可收合', () => {
   }
 
   assert.doesNotMatch(html, /id="allocation-toggle"/, '圓餅圖不應再使用專用收合按鈕');
+});
+
+test('配息提醒提供一鍵忽略，且不會忽略分割提醒', () => {
+  assert.match(appJs, /function ignoreAllDividendAlerts\(/);
+  assert.match(appJs, /alert-ignore-divs/);
+  assert.match(appJs, /忽略全部配息/);
+  assert.match(appJs, /filter\(\(a\) => a\.type === 'div'\)/);
+  assert.doesNotMatch(appJs, /filter\(\(a\) => a\.type !== 'split'\)/);
 });
