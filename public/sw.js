@@ -1,6 +1,6 @@
 // 極簡 service worker：頁面殼 cache-first、API network-first（有網路一律拿新資料）
 // 改版時把 CACHE_VERSION 加一，install 後舊快取會在 activate 清掉。
-const CACHE_VERSION = 'v9';
+const CACHE_VERSION = 'v10';
 const SHELL_CACHE = 'shell-' + CACHE_VERSION;
 const DATA_CACHE = 'data-' + CACHE_VERSION;
 const SHELL_ASSETS = [
