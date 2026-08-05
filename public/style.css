@@ -480,6 +480,9 @@ h1 {
     background: var(--surface-raised);
     box-shadow: var(--shadow-sm);
   }
+  .holdings tbody tr.holdings-empty-row {
+    display: block;
+  }
   .holdings tbody tr:hover {
     background: color-mix(in srgb, var(--series-1) 4%, var(--surface));
   }
@@ -506,6 +509,9 @@ h1 {
     border-bottom: 1px solid var(--soft-border);
   }
   .holdings .holding-main::before {
+    display: none;
+  }
+  .holdings .holdings-empty-row td::before {
     display: none;
   }
   .holdings td[data-label="投入進度"] {
@@ -798,6 +804,12 @@ tbody tr {
   transition: background 0.16s ease;
 }
 tbody tr:hover { background: color-mix(in srgb, var(--series-1) 5%, transparent); }
+.holdings-empty-row td {
+  color: var(--text-muted);
+  text-align: center;
+  padding: 24px 12px;
+  white-space: normal;
+}
 
 th.num, td.num {
   text-align: right;

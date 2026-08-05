@@ -672,6 +672,16 @@ function initPlans() {
 function render() {
   renderPlanTabs();
   const rows = sortedByTargetPercent(planStocks().map(computeStock), (r) => r.stock);
+  const holdingRows = hasTarget()
+    ? rows
+    : rows.filter(
+        (r) =>
+          r.shares !== 0 ||
+          (r.invested ?? 0) !== 0 ||
+          (r.valueTWD ?? 0) !== 0 ||
+          (r.realized ?? 0) !== 0 ||
+          (r.dividends ?? 0) !== 0
+      );
 
   const totalInvested = rows.reduce((s, r) => s + (r.invested ?? 0), 0);
   const anyValueMissing = rows.some((r) => r.valueTWD == null);
@@ -725,7 +735,7 @@ function render() {
   }
 
   renderAllocationCollapsed();
-  renderHoldings(rows, totalInvested, totalValue, totalPnl);
+  renderHoldings(holdingRows, totalInvested, totalValue, totalPnl);
   renderRebalance(rows, totalValue);
   renderSnapshotChart(rows);
   renderDonut(rows);
@@ -1115,6 +1125,12 @@ function bindSnapshotHover(snapshots, daily, geo) {
 function renderHoldings(rows, totalInvested, totalValue, totalPnl) {
   const body = $('holdings-body');
   body.innerHTML = '';
+  if (!rows.length) {
+    body.innerHTML = `
+      <tr class="holdings-empty-row">
+        <td colspan="9">這個計畫目前還沒有持股；新增交易後才會出現在這裡。</td>
+      </tr>`;
+  }
   for (const r of rows) {
     const { stock } = r;
     const tr = document.createElement('tr');
