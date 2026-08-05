@@ -145,6 +145,12 @@
     );
   }
 
+  // 從既有計畫複製交易：產生獨立副本（新的交易 id、只掛新計畫），來源不受影響。
+  // makeId 由呼叫端提供，讓這個函式維持純函式。
+  function copyTransactionsToPlan(transactions, fromPlanId, toPlanId, makeId) {
+    return transactionsInPlan(transactions, fromPlanId).map((t) => ({ ...t, id: makeId(), plans: [toPlanId] }));
+  }
+
   // 刪除計畫：孤兒交易與該計畫的快照一併刪除，同時掛在其他計畫的交易只移除這個標籤
   function removePlan(doc, planId) {
     return {
@@ -525,6 +531,7 @@
     migratePortfolio,
     transactionsInPlan,
     transactionsOnlyInPlan,
+    copyTransactionsToPlan,
     removePlan,
     computeStock,
     computeDailySeries,

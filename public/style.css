@@ -1004,3 +1004,15 @@ tfoot td {
   color: var(--text-primary);
   font-family: inherit;
 }
+
+.plan-copy-options { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; }
+.plan-copy-options label { display: inline-flex; align-items: center; gap: 4px; flex-direction: row; }
+.plan-form select {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--page);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.9rem;
+}

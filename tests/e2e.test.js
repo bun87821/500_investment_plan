@@ -346,5 +346,37 @@ test('端對端：計畫分頁切換後數字跟著換，重新載入回到上�
   const stillShared = after.transactions.find((x) => x.shares === 10 && x.stockId === 'TSM');
   assert.deepEqual(stillShared.plans, ['plan-1'], '共用的交易保留，只掉標籤');
 
+  // --- 從既有計畫複製 ---
+  const mainRows = await page.locator('#tx-body tr').count();
+  const mainInvested = await page.textContent('#kpi-invested');
+  const mainTxTotal = after.transactions.length;
+
+  await page.click('#plan-manage-btn');
+  await page.fill('#plan-name', '退休');
+  await page.selectOption('#plan-copy-from', 'plan-1');
+  await page.check('#plan-copy-txs');
+  assert.ok(await page.locator('#plan-copy-hint').isVisible(), '複製交易時應提示投入金額會重複出現');
+  await page.click('#plan-form button[type="submit"]');
+  await page.waitForFunction(() => document.querySelectorAll('.plan-tab').length === 2, { timeout: 10000 });
+
+  // 新計畫沿用來源的總預算與配置，且有一份一模一樣的交易副本
+  assert.equal(await page.textContent('.plan-tab.active'), '退休');
+  assert.ok((await page.textContent('#subtitle')).includes('NT$5,000,000'));
+  assert.equal(await page.locator('#tx-body tr').count(), mainRows);
+  assert.equal(await page.textContent('#kpi-invested'), mainInvested);
+
+  const copied = await (await fetch(srv.url + '/api/portfolio')).json();
+  assert.equal(copied.transactions.length, mainTxTotal * 2, '交易應被複製一份');
+  assert.deepEqual(copied.plans[1].allocations, copied.plans[0].allocations);
+  const sourceIds = new Set(after.transactions.map((t) => t.id));
+  const copies = copied.transactions.filter((t) => !sourceIds.has(t.id));
+  assert.equal(copies.length, mainTxTotal);
+  const newPlanId = copied.plans[1].id;
+  for (const c of copies) assert.deepEqual(c.plans, [newPlanId], '副本只掛新計畫');
+  // 來源計畫的交易完全沒被動到
+  for (const src of after.transactions) {
+    assert.deepEqual(copied.transactions.find((t) => t.id === src.id).plans, src.plans);
+  }
+
   assert.deepEqual(jsErrors, [], 'JS errors: ' + jsErrors.join('; '));
 });

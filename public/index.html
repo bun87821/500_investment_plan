@@ -62,8 +62,17 @@
         </label>
         <label>
           總預算（台幣）
-          <input type="text" id="plan-budget" inputmode="decimal" placeholder="1500000" required />
+          <input type="text" id="plan-budget" inputmode="decimal" placeholder="留空則沿用來源計畫" />
         </label>
+        <label id="plan-copy-from-label">
+          從既有計畫複製
+          <select id="plan-copy-from"></select>
+        </label>
+        <div class="plan-copy-options" id="plan-copy-options" hidden>
+          <label><input type="checkbox" id="plan-copy-alloc" checked /> 目標金額與配置比例</label>
+          <label><input type="checkbox" id="plan-copy-txs" /> 連同交易紀錄</label>
+          <span class="hint" id="plan-copy-hint" hidden>交易會複製成獨立副本，帳上會多出一份相同金額的投入。若不是真的又投了那筆錢，建立後請改成實際金額或刪掉。</span>
+        </div>
         <div class="plan-form-actions">
           <button type="submit" class="btn btn-primary">新增計畫</button>
           <button type="button" id="plan-cancel" class="btn">關閉</button>

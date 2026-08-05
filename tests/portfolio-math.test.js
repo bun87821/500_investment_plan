@@ -738,3 +738,26 @@ test('removePlan：孤兒交易一併刪除，共用的交易只移除這個標�
   assert.equal(doc.transactions.length, 3);
   assert.deepEqual(doc.transactions[1].plans, ['credit', 'retire']);
 });
+
+// ---------- 多計畫：從既有計畫複製 ----------
+
+test('copyTransactionsToPlan：複製為獨立副本（新 id、只掛新計畫），來源不受影響', () => {
+  const txs = [
+    { id: 'a', stockId: '2330', date: '2026-01-05', shares: 100, price: 1000, plans: ['credit'] },
+    { id: 'b', stockId: 'NVDA', date: '2026-02-01', shares: 10, price: 180, plans: ['credit', 'retire'] },
+    { id: 'c', stockId: 'MU', date: '2026-03-01', shares: 5, price: 100, plans: ['retire'] },
+  ];
+  let n = 0;
+  const copies = PM.copyTransactionsToPlan(txs, 'credit', 'fresh', () => 'copy-' + ++n);
+
+  assert.deepEqual(copies.map((t) => t.id), ['copy-1', 'copy-2']); // 只複製看得到 credit 的那兩筆
+  assert.deepEqual(copies.map((t) => t.stockId), ['2330', 'NVDA']);
+  assert.equal(copies[0].shares, 100);
+  assert.equal(copies[0].price, 1000);
+  for (const c of copies) assert.deepEqual(c.plans, ['fresh']); // 副本只掛新計畫
+
+  // 來源完全不受影響
+  assert.equal(txs.length, 3);
+  assert.deepEqual(txs[0].plans, ['credit']);
+  assert.deepEqual(txs[1].plans, ['credit', 'retire']);
+});

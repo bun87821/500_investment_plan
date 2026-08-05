@@ -470,10 +470,32 @@ function renderPlanRows() {
   });
 }
 
+// 複製來源下拉：不選＝建立空白計畫
+function renderPlanCopyFrom() {
+  const sel = $('plan-copy-from');
+  sel.innerHTML = '<option value="">（不複製，建立空白計畫）</option>';
+  for (const p of state.plans) {
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    opt.textContent = p.name;
+    sel.appendChild(opt);
+  }
+  updatePlanCopyUI();
+}
+
+function updatePlanCopyUI() {
+  const from = $('plan-copy-from').value;
+  $('plan-copy-options').hidden = !from;
+  $('plan-copy-hint').hidden = !from || !$('plan-copy-txs').checked;
+}
+
 function openPlanCard() {
   deletingPlanId = null;
   $('plan-name').value = '';
   $('plan-budget').value = '';
+  $('plan-copy-txs').checked = false;
+  $('plan-copy-alloc').checked = true;
+  renderPlanCopyFrom();
   renderPlanRows();
   $('plan-card').hidden = false;
   $('plan-name').focus();
@@ -492,18 +514,21 @@ async function deletePlan(planId) {
   state.plans = doc.plans;
   state.transactions = doc.transactions;
   state.snapshots = doc.snapshots;
-  deletingPlanId = null;
   selectPlan(state.activePlanId); // 刪掉的是目前計畫 → 退回第一個
-  renderPlanRows();
+  closePlanCard();
   await savePortfolio();
   render();
   await loadHistory();
 }
 
-// 計畫識別碼不隨名稱改變，取最小的未使用序號
+// 計畫識別碼不隨名稱改變，取現有序號的最大值 +1。
+// 刪除計畫時會一併清掉指向它的交易與快照，因此序號回收不會對到殘留的資料。
 function newPlanId() {
-  const used = new Set(state.plans.map((p) => p.id));
-  for (let i = 1; ; i++) if (!used.has('plan-' + i)) return 'plan-' + i;
+  const max = state.plans.reduce((m, p) => {
+    const n = Number(String(p.id).replace(/^plan-/, ''));
+    return Number.isFinite(n) ? Math.max(m, n) : m;
+  }, 0);
+  return 'plan-' + (max + 1);
 }
 
 function initPlans() {
@@ -517,6 +542,8 @@ function initPlans() {
   });
   $('plan-cancel').addEventListener('click', closePlanCard);
   $('tx-plans').addEventListener('change', updateTxPlansHint);
+  $('plan-copy-from').addEventListener('change', updatePlanCopyUI);
+  $('plan-copy-txs').addEventListener('change', updatePlanCopyUI);
 
   // 管理計畫的列：改名、改總預算、調順序、刪除
   $('plan-rows').addEventListener('change', async (e) => {
@@ -570,11 +597,28 @@ function initPlans() {
   $('plan-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const name = $('plan-name').value.trim();
-    const budget = parseDecimalInput($('plan-budget').value);
+    const source = state.plans.find((p) => p.id === $('plan-copy-from').value);
+    const copyAlloc = source && $('plan-copy-alloc').checked;
+    const budgetRaw = $('plan-budget').value.trim();
+    // 複製目標金額時，總預算欄留空就沿用來源的
+    const budget = budgetRaw === '' && copyAlloc ? source.budget : parseDecimalInput(budgetRaw);
     if (!name) return alert('請填計畫名稱');
     if (!(budget > 0)) return alert('總預算必須是正數');
-    const plan = { id: newPlanId(), name, budget, allocations: {} };
+    const plan = {
+      id: newPlanId(),
+      name,
+      budget,
+      allocations: copyAlloc ? { ...source.allocations } : {},
+    };
     state.plans.push(plan);
+    if (source && $('plan-copy-txs').checked) {
+      // 獨立副本：之後在新分頁改動或刪除都不影響來源計畫
+      state.transactions.push(
+        ...PortfolioMath.copyTransactionsToPlan(state.transactions, source.id, plan.id, () =>
+          Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+        )
+      );
+    }
     selectPlan(plan.id);
     closePlanCard();
     await savePortfolio();
