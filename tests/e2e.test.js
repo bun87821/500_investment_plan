@@ -376,6 +376,29 @@ test('端對端：計畫分頁切換後數字跟著換，重新載入回到上�
   assert.equal(await page.locator('#tx-body tr').count(), 1);
   assert.notEqual(await page.textContent('#kpi-invested'), 'NT$0');
 
+  // 純記錄型計畫也要能新增標的：編輯標的存得起來，交易表單的下拉才長得出新選項
+  const optionsBefore = await page.locator('#tx-stock option').count();
+  await page.click('#edit-stocks-btn');
+  assert.ok(await page.locator('#edit-budget-field').isHidden(), '純記錄型不顯示總預算欄');
+  assert.ok(await page.locator('#editor-percent-head').isHidden(), '純記錄型不顯示目標比例欄');
+  await page.click('#editor-add');
+  const newRow = page.locator('#editor-body tr').last();
+  await newRow.locator('.e-symbol').fill('2454.TW');
+  await newRow.locator('.e-name').fill('聯發科');
+  await page.click('#editor-save');
+  await page.waitForTimeout(600);
+  assert.ok(await page.locator('#editor-card').isHidden(), '儲存後對話框應關閉（沒有被總預算檢查擋下）');
+  assert.equal(await page.locator('#tx-stock option').count(), optionsBefore + 1, '新標的應出現在交易表單');
+  assert.ok((await page.textContent('#tx-stock')).includes('聯發科'));
+
+  // 選得到新標的並記得起來
+  await page.selectOption('#tx-stock', '2454.TW');
+  await page.fill('#tx-shares', '20');
+  await page.fill('#tx-price', '1200');
+  await page.click('#tx-submit');
+  await page.waitForTimeout(500);
+  assert.equal(await page.locator('#tx-body tr').count(), 2);
+
   // 在管理計畫填回總預算 → 目標相關區塊回來
   await page.click('#plan-manage-btn');
   const recordRow = page.locator('.plan-row').last();
