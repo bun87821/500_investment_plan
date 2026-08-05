@@ -878,6 +878,7 @@ tfoot td {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
   font-size: 0.8rem;
   color: var(--text-secondary);
 }
@@ -887,6 +888,7 @@ tfoot td {
   min-height: 38px;
   min-width: 0;
   width: 100%;
+  max-width: 100%;
   padding: 8px 10px;
   font-size: 0.9rem;
   background: var(--surface-raised);
@@ -897,6 +899,19 @@ tfoot td {
   outline: 3px solid color-mix(in srgb, var(--series-1) 24%, transparent);
   outline-offset: 1px;
   border-color: var(--series-1);
+}
+.tx-form input[type="date"] {
+  display: block;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.tx-form input[type="date"]::-webkit-date-and-time-value {
+  min-width: 0;
+  width: 100%;
+  text-align: left;
+}
+.tx-form input[type="date"]::-webkit-calendar-picker-indicator {
+  flex: 0 0 auto;
 }
 
 .tx-del, .tx-edit {
@@ -1162,11 +1177,46 @@ tfoot td {
 .tx-plan-option {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
   min-width: 0;
+  min-height: 32px;
   font-size: 0.85rem;
   color: var(--text-primary);
   cursor: pointer;
+}
+.tx-plan-option input[type="checkbox"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  margin: 0;
+  border: 1.5px solid var(--baseline);
+  border-radius: 5px;
+  background: var(--surface-raised);
+  display: grid;
+  place-content: center;
+}
+.tx-plan-option input[type="checkbox"]::before {
+  content: "";
+  width: 9px;
+  height: 5px;
+  border-left: 2px solid #fff;
+  border-bottom: 2px solid #fff;
+  transform: rotate(-45deg) scale(0);
+  transform-origin: center;
+  transition: transform 0.12s ease;
+}
+.tx-plan-option input[type="checkbox"]:checked {
+  border-color: var(--series-1);
+  background: var(--series-1);
+}
+.tx-plan-option input[type="checkbox"]:checked::before {
+  transform: rotate(-45deg) scale(1);
+}
+.tx-plan-option input[type="checkbox"]:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--series-1) 24%, transparent);
+  outline-offset: 2px;
 }
 
 /* ---- 管理計畫 ---- */
