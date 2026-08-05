@@ -100,6 +100,44 @@
     };
   }
 
+  const DEFAULT_BUDGET = 5_000_000;
+
+  // 舊格式（單一計畫、目標比例掛在標的上）→ 新格式（plans 陣列、交易與快照標明歸屬）。
+  // 純函式且幂等：不就地修改輸入，已遷移的資料再跑一次結果相同。
+  function migratePortfolio(doc) {
+    const stocks = Array.isArray(doc.stocks) ? doc.stocks : [];
+    let plans = Array.isArray(doc.plans) ? doc.plans : [];
+    if (!plans.length) {
+      const allocations = {};
+      for (const s of stocks) if (Number(s.percent) > 0) allocations[s.id] = Number(s.percent);
+      plans = [
+        {
+          id: 'plan-1',
+          name: '主要計畫',
+          budget: Number(doc.budget) > 0 ? Number(doc.budget) : DEFAULT_BUDGET,
+          allocations,
+        },
+      ];
+    }
+    const primary = plans[0].id;
+    const transactions = (Array.isArray(doc.transactions) ? doc.transactions : []).map((t) =>
+      Array.isArray(t.plans) && t.plans.length ? t : { ...t, plans: [primary] }
+    );
+    const snapshots = (Array.isArray(doc.snapshots) ? doc.snapshots : []).map((s) =>
+      s.planId ? s : { ...s, planId: primary }
+    );
+    return { ...doc, plans, transactions, snapshots };
+  }
+
+  // 多計畫的唯一篩選點：所有計算函式都吃「已篩選的交易」，本身不認得計畫。
+  // 沒有標籤的交易在每個計畫都看得到——遷移會補上標籤，萬一有漏網之魚，
+  // 寧可到處都看得到讓使用者發現，也不要整筆從畫面上消失。
+  function transactionsInPlan(transactions, planId) {
+    return (Array.isArray(transactions) ? transactions : []).filter(
+      (t) => !Array.isArray(t.plans) || !t.plans.length || t.plans.includes(planId)
+    );
+  }
+
   function msToDateStr(ms) {
     return new Date(ms).toISOString().slice(0, 10);
   }
@@ -464,6 +502,9 @@
     fxSymbolOf,
     fxRateOf,
     eventKey,
+    DEFAULT_BUDGET,
+    migratePortfolio,
+    transactionsInPlan,
     computeStock,
     computeDailySeries,
     computeMonthlyReport,

@@ -58,6 +58,7 @@ const fxSymbolOf = PortfolioMath.fxSymbolOf;
 
 const state = {
   budget: DEFAULT_BUDGET,
+  plans: [], // 具名投資規劃 { id, name, budget, allocations }；載入時由遷移保證至少有一個
   stocks: DEFAULT_STOCKS,
   transactions: [],
   snapshots: [],
@@ -111,8 +112,11 @@ const quoteUrlOf = (symbol) => {
 };
 
 // ---------- 資料存取 ----------
-function applyDoc(data) {
+function applyDoc(raw) {
+  // 舊格式在載入時就地遷移（記憶體），下一次存檔才落地到伺服器
+  const data = PortfolioMath.migratePortfolio({ ...raw, stocks: Array.isArray(raw.stocks) && raw.stocks.length ? raw.stocks : state.stocks });
   if (data.rev !== undefined) state.rev = Number(data.rev) || 0;
+  state.plans = data.plans;
   state.transactions = Array.isArray(data.transactions) ? data.transactions : [];
   state.snapshots = Array.isArray(data.snapshots) ? data.snapshots : [];
   state.ignoredEvents = Array.isArray(data.ignoredEvents) ? data.ignoredEvents : [];
@@ -139,10 +143,18 @@ function tryApplyBackup(key) {
   return false;
 }
 
+// 完全沒有資料可套用時（訪客且無備份）applyDoc 不會跑到，這裡補上預設計畫
+function ensurePlans() {
+  if (!state.plans.length) {
+    state.plans = PortfolioMath.migratePortfolio({ budget: state.budget, stocks: state.stocks }).plans;
+  }
+}
+
 async function loadPortfolio() {
   if (isGuest()) {
     // 訪客模式：直接從瀏覽器讀（也相容啟用登入前的舊 key）
     tryApplyBackup(backupKey()) || tryApplyBackup('portfolio-backup');
+    ensurePlans();
     return;
   }
   try {
@@ -161,11 +173,13 @@ async function loadPortfolio() {
       showNotice('已將瀏覽器中的紀錄同步到你的帳號。');
     }
   }
+  ensurePlans();
 }
 
 async function savePortfolio({ includeSnapshots = false } = {}) {
   const backup = {
     budget: state.budget,
+    plans: state.plans,
     stocks: state.stocks,
     transactions: state.transactions,
     snapshots: state.snapshots,
@@ -173,6 +187,7 @@ async function savePortfolio({ includeSnapshots = false } = {}) {
   };
   const payload = {
     budget: state.budget,
+    plans: state.plans,
     stocks: state.stocks,
     transactions: state.transactions,
     ignoredEvents: state.ignoredEvents,
@@ -1771,7 +1786,7 @@ function initForm() {
   }
 
   $('export-btn').addEventListener('click', () => {
-    const doc = { budget: state.budget, stocks: state.stocks, transactions: state.transactions, snapshots: state.snapshots };
+    const doc = { budget: state.budget, plans: state.plans, stocks: state.stocks, transactions: state.transactions, snapshots: state.snapshots };
     const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -1840,6 +1855,7 @@ async function onGoogleCredential(response) {
     $('login-view').hidden = true;
     // 換人了：先回到預設狀態再載入帳號資料，避免訪客資料和帳號資料混在一起
     state.budget = DEFAULT_BUDGET;
+    state.plans = [];
     state.stocks = DEFAULT_STOCKS;
     state.transactions = [];
     state.snapshots = [];

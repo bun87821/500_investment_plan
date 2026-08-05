@@ -232,7 +232,37 @@ app.put('/api/portfolio', async (req, res) => {
   if (!body || !Array.isArray(body.transactions)) {
     return res.status(400).json({ error: 'transactions 必須是陣列' });
   }
+  // 交易的計畫歸屬（有帶就必須是非空字串陣列；沒帶的由遷移補上）
+  for (const t of body.transactions) {
+    if (t && t.plans !== undefined) {
+      if (!Array.isArray(t.plans) || !t.plans.length || t.plans.some((p) => typeof p !== 'string' || !p)) {
+        return res.status(400).json({ error: '交易的 plans 必須是非空字串陣列' });
+      }
+    }
+  }
   const doc = { transactions: body.transactions };
+  if (body.plans !== undefined) {
+    if (!Array.isArray(body.plans)) {
+      return res.status(400).json({ error: 'plans 必須是陣列' });
+    }
+    const seen = new Set();
+    for (const p of body.plans) {
+      if (!p || typeof p.id !== 'string' || !p.id || typeof p.name !== 'string' || !p.name) {
+        return res.status(400).json({ error: '每個計畫都需要 id 與 name' });
+      }
+      if (!(Number(p.budget) > 0)) {
+        return res.status(400).json({ error: '計畫的 budget 必須是正數' });
+      }
+      if (p.allocations !== undefined && (typeof p.allocations !== 'object' || p.allocations === null || Array.isArray(p.allocations))) {
+        return res.status(400).json({ error: '計畫的 allocations 必須是物件' });
+      }
+      if (seen.has(p.id)) {
+        return res.status(400).json({ error: '計畫 id 不得重複' });
+      }
+      seen.add(p.id);
+    }
+    doc.plans = body.plans;
+  }
   if (body.stocks !== undefined) {
     if (!Array.isArray(body.stocks)) {
       return res.status(400).json({ error: 'stocks 必須是陣列' });
@@ -261,7 +291,8 @@ app.put('/api/portfolio', async (req, res) => {
   try {
     // 樂觀鎖：客戶端帶上讀取時的 rev，不符表示其他裝置已改過 → 409 附最新資料
     const expectedRev = body.rev === undefined ? null : Number(body.rev);
-    const rev = await writeDoc(user.sub, doc, Number.isNaN(expectedRev) ? null : expectedRev);
+    // 遷移只在寫入時落地：舊格式資料經一次寫入即帶有 plans 與交易歸屬
+    const rev = await writeDoc(user.sub, PortfolioMath.migratePortfolio(doc), Number.isNaN(expectedRev) ? null : expectedRev);
     res.json({ ok: true, rev });
   } catch (err) {
     if (err instanceof ConflictError) {

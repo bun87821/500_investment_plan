@@ -558,3 +558,140 @@ test('computeXirr：期間不足 30 天、市值缺漏、無交易 → null', ()
   assert.equal(PM.computeXirr(xirrArgs(txs, [{ valueTWD: null }], '2027-01-01')), null); // 市值未知
   assert.equal(PM.computeXirr(xirrArgs([], [{ valueTWD: 1100 }], '2027-01-01')), null); // 無金流
 });
+
+// ---------- 多計畫：交易篩選 ----------
+
+test('transactionsInPlan：只留下掛在該計畫的交易，同時掛多個計畫的兩邊都算', () => {
+  const txs = [
+    { id: 'a', plans: ['p1'] },
+    { id: 'b', plans: ['p2'] },
+    { id: 'c', plans: ['p1', 'p2'] },
+  ];
+  assert.deepEqual(
+    PM.transactionsInPlan(txs, 'p1').map((t) => t.id),
+    ['a', 'c']
+  );
+  assert.deepEqual(
+    PM.transactionsInPlan(txs, 'p2').map((t) => t.id),
+    ['b', 'c']
+  );
+  assert.deepEqual(PM.transactionsInPlan(txs, 'p3'), []);
+});
+
+test('transactionsInPlan：沒有計畫標籤的交易在每個計畫都看得到（不會憑空消失）', () => {
+  // 遷移會補上標籤；萬一有漏網之魚，寧可到處都看得到讓使用者發現，也不要整筆從畫面上消失
+  const txs = [{ id: 'x' }, { id: 'y', plans: [] }, { id: 'z', plans: ['p1'] }];
+  assert.deepEqual(
+    PM.transactionsInPlan(txs, 'p1').map((t) => t.id),
+    ['x', 'y', 'z']
+  );
+  assert.deepEqual(
+    PM.transactionsInPlan(txs, 'p2').map((t) => t.id),
+    ['x', 'y']
+  );
+});
+
+// ---------- 多計畫：帳號資料遷移 ----------
+
+test('migratePortfolio：舊格式長出「主要計畫」，交易與快照補上歸屬', () => {
+  const legacy = {
+    budget: 5_000_000,
+    stocks: [
+      { id: '2330', percent: 25 },
+      { id: 'NVDA', percent: 7 },
+      { id: 'IDLE', percent: 0 },
+    ],
+    transactions: [{ id: 't1', stockId: '2330', date: '2026-01-05', shares: 100, price: 1000 }],
+    snapshots: [{ date: '2026-01-05', totalValue: 100_000 }],
+  };
+  const out = PM.migratePortfolio(legacy);
+
+  assert.equal(out.plans.length, 1);
+  const plan = out.plans[0];
+  assert.equal(plan.name, '主要計畫');
+  assert.equal(plan.budget, 5_000_000);
+  assert.deepEqual(plan.allocations, { '2330': 25, NVDA: 7 }); // 比例 0 的標的不排進來
+  assert.deepEqual(out.transactions[0].plans, [plan.id]);
+  assert.equal(out.snapshots[0].planId, plan.id);
+
+  // 不就地修改輸入
+  assert.equal(legacy.transactions[0].plans, undefined);
+  assert.equal(legacy.snapshots[0].planId, undefined);
+});
+
+test('migratePortfolio：無 budget 用預設 500 萬；再跑一次完全不變（幂等）', () => {
+  const once = PM.migratePortfolio({
+    stocks: [{ id: '2330', percent: 100 }],
+    transactions: [{ id: 't1', stockId: '2330', date: '2026-01-05', shares: 1, price: 1 }],
+  });
+  assert.equal(once.plans[0].budget, 5_000_000);
+
+  const twice = PM.migratePortfolio(once);
+  assert.deepEqual(twice, once);
+});
+
+test('migratePortfolio：已有計畫時不再建新計畫，只補齊缺歸屬的交易與快照', () => {
+  const doc = {
+    plans: [
+      { id: 'p1', name: '信貸', budget: 1_500_000, allocations: { '2330': 40 } },
+      { id: 'p2', name: '退休', budget: 5_000_000, allocations: {} },
+    ],
+    transactions: [
+      { id: 'a', plans: ['p2'] },
+      { id: 'b' }, // 漏網之魚 → 補第一個計畫
+    ],
+    snapshots: [{ date: '2026-01-05', planId: 'p2' }, { date: '2026-01-06' }],
+  };
+  const out = PM.migratePortfolio(doc);
+  assert.equal(out.plans.length, 2);
+  assert.equal(out.plans[0].name, '信貸');
+  assert.deepEqual(out.transactions[0].plans, ['p2']);
+  assert.deepEqual(out.transactions[1].plans, ['p1']);
+  assert.equal(out.snapshots[0].planId, 'p2');
+  assert.equal(out.snapshots[1].planId, 'p1');
+});
+
+test('同一檔標的分屬兩個計畫：各自的平均成本與已實現損益互不干擾（手算）', () => {
+  // 信貸：買 100@500=50,000；共用那筆再買 20@500=10,000 → 120 股、成本 60,000
+  // 退休：買 200@600=120,000；賣 50@700 入帳 35,000、移除均價 600×50=30,000 → 已實現 +5,000、餘 150 股成本 90,000
+  //       共用那筆再買 20@500=10,000 → 170 股、成本 100,000
+  // 現價 650 → 信貸市值 120×650=78,000、未實現 +18,000；退休市值 170×650=110,500、未實現 +10,500
+  const txs = [
+    { id: 'a1', stockId: 'aaa', date: '2026-01-05', shares: 100, price: 500, plans: ['credit'] },
+    { id: 'b1', stockId: 'aaa', date: '2026-01-05', shares: 200, price: 600, plans: ['retire'] },
+    { id: 'b2', stockId: 'aaa', date: '2026-01-06', shares: -50, price: 700, plans: ['retire'] },
+    { id: 'both', stockId: 'aaa', date: '2026-01-07', shares: 20, price: 500, plans: ['credit', 'retire'] },
+  ];
+  const quotes = { 'AAA.TW': { price: 650 } };
+
+  const credit = PM.computeStock(TW_STOCK, PM.transactionsInPlan(txs, 'credit'), quotes, 0);
+  assert.equal(credit.shares, 120);
+  assert.equal(credit.invested, 60_000);
+  assert.equal(credit.avgCost, 500);
+  assert.equal(credit.realized, 0);
+  assert.equal(credit.valueTWD, 78_000);
+  assert.equal(credit.pnl, 18_000);
+
+  const retire = PM.computeStock(TW_STOCK, PM.transactionsInPlan(txs, 'retire'), quotes, 0);
+  assert.equal(retire.shares, 170);
+  assert.equal(retire.invested, 100_000);
+  assert.equal(retire.realized, 5_000);
+  assert.equal(retire.valueTWD, 110_500);
+  assert.equal(retire.pnl, 10_500);
+});
+
+test('單一計畫的 XIRR：另一計畫的雜訊交易不得影響結果（沿用 Microsoft 文件範例）', () => {
+  // 與上面的 Microsoft XIRR 文件範例同一組金流，但額外混入一批屬於別的計畫的交易。
+  // 篩選後結果必須與原案例一模一樣：0.373362535
+  const txs = [
+    { stockId: 'aaa', date: '2008-01-01', shares: 1000, price: 10, twdCost: 10_000, plans: ['retire'] },
+    { stockId: 'aaa', date: '2008-03-01', shares: -100, price: 27.5, twdCost: 2_750, plans: ['retire'] },
+    { stockId: 'aaa', date: '2008-10-30', shares: -100, price: 42.5, twdCost: 4_250, plans: ['retire'] },
+    { stockId: 'aaa', date: '2009-02-15', shares: -100, price: 32.5, twdCost: 3_250, plans: ['retire'] },
+    // 雜訊：信貸計畫的交易
+    { stockId: 'aaa', date: '2008-06-01', shares: 500, price: 20, twdCost: 10_000, plans: ['credit'] },
+    { stockId: 'aaa', date: '2009-01-01', shares: -200, price: 50, twdCost: 10_000, plans: ['credit'] },
+  ];
+  const r = PM.computeXirr(xirrArgs(PM.transactionsInPlan(txs, 'retire'), [{ valueTWD: 2_750 }], '2009-04-01'));
+  assert.ok(Math.abs(r - 0.373362535) < 1e-6, `expect 0.373362535, got ${r}`);
+});

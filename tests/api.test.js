@@ -197,3 +197,74 @@ test('事件端點：解析分割與配息、第二次請求走快取不重打�
   assert.deepEqual(second.events, first.events);
   assert.equal(upstreamHits, 1, '第二次應命中快取，不重打上游');
 });
+
+test('PUT 驗證：plans 與交易歸屬', async (t) => {
+  const srv = await startServer();
+  t.after(() => srv.stop());
+
+  // 合法的 plans 可寫入並讀回
+  let res = await fetch(srv.url + '/api/portfolio', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      transactions: [{ id: 't1', stockId: '2330', date: '2026-01-05', shares: 100, price: 1000, plans: ['p1'] }],
+      plans: [
+        { id: 'p1', name: '信貸', budget: 1_500_000, allocations: { '2330': 40 } },
+        { id: 'p2', name: '退休', budget: 5_000_000, allocations: {} },
+      ],
+      snapshots: [{ date: '2026-01-05', planId: 'p2', totalValue: 100_000 }],
+    }),
+  });
+  assert.equal(res.status, 200);
+
+  const body = await (await fetch(srv.url + '/api/portfolio')).json();
+  assert.equal(body.plans.length, 2);
+  assert.equal(body.plans[0].name, '信貸');
+  assert.deepEqual(body.plans[0].allocations, { '2330': 40 });
+  assert.deepEqual(body.transactions[0].plans, ['p1']);
+  assert.equal(body.snapshots[0].planId, 'p2');
+
+  for (const bad of [
+    { transactions: [], plans: 'x' },
+    { transactions: [], plans: [{ name: '沒有 id', budget: 1 }] },
+    { transactions: [], plans: [{ id: 'p1', budget: 1 }] },
+    { transactions: [], plans: [{ id: 'p1', name: '預算為零', budget: 0 }] },
+    { transactions: [], plans: [{ id: 'p1', name: 'A', budget: 1 }, { id: 'p1', name: 'B', budget: 1 }] },
+    { transactions: [], plans: [{ id: 'p1', name: 'A', budget: 1, allocations: 'x' }] },
+    { transactions: [{ id: 't1', plans: 'x' }] },
+    { transactions: [{ id: 't1', plans: [] }] },
+    { transactions: [{ id: 't1', plans: [1] }] },
+  ]) {
+    const res = await fetch(srv.url + '/api/portfolio', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(bad),
+    });
+    assert.equal(res.status, 400, JSON.stringify(bad));
+  }
+});
+
+test('舊格式帳號資料寫入後回讀，帶有遷移結果', async (t) => {
+  const srv = await startServer();
+  t.after(() => srv.stop());
+
+  const res = await fetch(srv.url + '/api/portfolio', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      budget: 8_000_000,
+      stocks: [{ id: '2330', name: '台積電', symbol: '2330.TW', currency: 'TWD', percent: 25 }],
+      transactions: [{ id: 't1', stockId: '2330', date: '2026-01-05', shares: 100, price: 1000 }],
+      snapshots: [{ date: '2026-01-05', totalValue: 100_000 }],
+    }),
+  });
+  assert.equal(res.status, 200);
+
+  const body = await (await fetch(srv.url + '/api/portfolio')).json();
+  assert.equal(body.plans.length, 1);
+  assert.equal(body.plans[0].name, '主要計畫');
+  assert.equal(body.plans[0].budget, 8_000_000);
+  assert.deepEqual(body.plans[0].allocations, { '2330': 25 });
+  assert.deepEqual(body.transactions[0].plans, [body.plans[0].id]);
+  assert.equal(body.snapshots[0].planId, body.plans[0].id);
+});
