@@ -250,8 +250,9 @@ app.put('/api/portfolio', async (req, res) => {
       if (!p || typeof p.id !== 'string' || !p.id || typeof p.name !== 'string' || !p.name) {
         return res.status(400).json({ error: '每個計畫都需要 id 與 name' });
       }
-      if (!(Number(p.budget) > 0)) {
-        return res.status(400).json({ error: '計畫的 budget 必須是正數' });
+      // budget 可省略或為 null（純記錄型計畫，不設目標）；有值時必須是正數
+      if (p.budget != null && !(Number(p.budget) > 0)) {
+        return res.status(400).json({ error: '計畫的 budget 必須是正數或留空' });
       }
       if (p.allocations !== undefined) {
         if (typeof p.allocations !== 'object' || p.allocations === null || Array.isArray(p.allocations)) {

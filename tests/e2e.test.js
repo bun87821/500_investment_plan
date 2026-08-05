@@ -353,6 +353,54 @@ test('端對端：計畫分頁切換後數字跟著換，重新載入回到上�
   const stillShared = after.transactions.find((x) => x.shares === 10 && x.stockId === 'TSM');
   assert.deepEqual(stillShared.plans, ['plan-1'], '共用的交易保留，只掉標籤');
 
+  // --- 純記錄型計畫：總預算留空 ---
+  await page.click('#plan-manage-btn');
+  await page.fill('#plan-name', '總投資');
+  await page.fill('#plan-budget', ''); // 留空＝不設目標
+  await page.click('#plan-form button[type="submit"]');
+  await page.waitForFunction(() => document.querySelectorAll('.plan-tab').length === 2, { timeout: 10000 });
+
+  assert.equal(await page.textContent('.plan-tab.active'), '總投資');
+  assert.ok((await page.textContent('#subtitle')).includes('純記錄型'));
+  assert.ok(await page.locator('#kpi-progress-card').isHidden(), '達成率 KPI 應收起來');
+  assert.ok(await page.locator('#overall-progress-card').isHidden(), '資金投入進度條應收起來');
+  assert.ok(await page.locator('#rebalance-card').isHidden(), '再平衡建議應收起來');
+  assert.ok(await page.locator('#basis-target-btn').isHidden(), '圓餅圖不應提供目標配置基準');
+
+  // 交易照常記，已投入與損益照算
+  await page.selectOption('#tx-stock', '2330');
+  await page.fill('#tx-shares', '100');
+  await page.fill('#tx-price', '1000');
+  await page.click('#tx-submit');
+  await page.waitForTimeout(500);
+  assert.equal(await page.locator('#tx-body tr').count(), 1);
+  assert.notEqual(await page.textContent('#kpi-invested'), 'NT$0');
+
+  // 在管理計畫填回總預算 → 目標相關區塊回來
+  await page.click('#plan-manage-btn');
+  const recordRow = page.locator('.plan-row').last();
+  await recordRow.locator('.plan-row-budget').fill('3000000');
+  await recordRow.locator('.plan-row-budget').blur();
+  await page.waitForTimeout(400);
+  assert.ok(await page.locator('#kpi-progress-card').isVisible(), '填回總預算後達成率應回來');
+  assert.ok(await page.locator('#rebalance-card').isVisible());
+  assert.ok((await page.textContent('#subtitle')).includes('NT$3,000,000'));
+
+  // 清回空白 → 又變成純記錄型，並確認存進伺服器
+  await recordRow.locator('.plan-row-budget').fill('');
+  await recordRow.locator('.plan-row-budget').blur();
+  await page.waitForTimeout(500);
+  assert.ok(await page.locator('#kpi-progress-card').isHidden());
+  const recordDoc = await (await fetch(srv.url + '/api/portfolio')).json();
+  assert.equal(recordDoc.plans.find((p) => p.name === '總投資').budget, null);
+
+  // 收拾：刪掉純記錄型計畫，後面的複製情境從單一計畫開始
+  await page.locator(`.plan-row[data-plan-id="${recordDoc.plans[1].id}"] .plan-delete`).click();
+  await page.fill('#plan-confirm-input', '總投資');
+  await page.click('#plan-confirm-btn');
+  await page.waitForTimeout(600);
+  assert.deepEqual(await page.locator('.plan-tab').allTextContents(), ['主要計畫']);
+
   // --- 從既有計畫複製 ---
   const mainRows = await page.locator('#tx-body tr').count();
   const mainInvested = await page.textContent('#kpi-invested');

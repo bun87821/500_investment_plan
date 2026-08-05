@@ -9,7 +9,8 @@
 | 帳號資料 | portfolio | 一個使用者的完整資料：`{ stocks, plans, transactions, snapshots, ignoredEvents, rev }`，透過 `GET/PUT /api/portfolio` 整份讀寫 |
 | 計畫 | plan | 一個具名的投資規劃：`{ id, name, budget, allocations }`，例如「信貸」「退休」。一個帳號可有多個，以分頁切換 |
 | 目前計畫 | active plan | 使用者當下選中的分頁；存在 localStorage（依使用者分開），重新開頁回到上次的計畫 |
-| 總預算 | `budget` | 單一計畫的總投資金額（台幣），每個計畫各有一個 |
+| 總預算 | `budget` | 單一計畫的總投資金額（台幣），每個計畫各有一個；留空（`null`）代表不設目標 |
+| 純記錄型計畫 | plan without target | 沒有總預算的計畫：只記錄持股、每日損益與總資產，不顯示達成率、資金投入進度條、再平衡建議與目標配置基準 |
 | 標的 | stock | 一檔要投資的股票：名稱、代號（Yahoo Finance symbol）、市場（台股/美股/韓股）、產業類別、幣別。全帳號共用一份清單 |
 | 目標配置 | `allocations` | 計畫底下「標的 id → 目標百分比」的對應，合計 100%；乘上該計畫的總預算得到每檔的目標金額。每個計畫各有一套 |
 | 交易 | transaction | 一筆買入/賣出/配息紀錄：`{ stockId, date, shares, price, twd, kind, plans }`；賣出以負股數表示；`plans` 標明它屬於哪些計畫（可多個） |

@@ -53,7 +53,6 @@ const BASIS = {
 
 // 共用計算（平均成本重放等）住在 portfolio-math.js，前後端共用同一份實作
 const fxSymbolOf = PortfolioMath.fxSymbolOf;
-const DEFAULT_BUDGET = PortfolioMath.DEFAULT_BUDGET;
 
 const state = {
   plans: [], // 具名投資規劃 { id, name, budget, allocations }；載入時由遷移保證至少有一個
@@ -80,7 +79,9 @@ const activePlanKey = () => 'active-plan:' + (state.user?.sub || 'local');
 
 // 目前計畫，以及「只屬於它」的交易與總預算——畫面上所有計算都經過這三個入口
 const activePlan = () => state.plans.find((p) => p.id === state.activePlanId) || state.plans[0] || null;
-const planBudget = () => activePlan()?.budget || DEFAULT_BUDGET;
+// 總預算留空（null／不存在）＝純記錄型計畫；所有與目標有關的顯示都經過這兩個入口
+const planBudget = () => (Number(activePlan()?.budget) > 0 ? Number(activePlan().budget) : null);
+const hasTarget = () => planBudget() != null;
 const planTxs = () => PortfolioMath.transactionsInPlan(state.transactions, activePlan()?.id);
 // 目標配置比例跟著計畫走：標的清單全帳號共用，percent 由目前計畫的 allocations 提供
 const planPercentOf = (stockId) => Number(activePlan()?.allocations?.[stockId]) || 0;
@@ -146,9 +147,12 @@ function applyDoc(raw) {
 
 // 切到指定計畫；找不到（例如已被刪除）就退回第一個計畫
 function selectPlan(planId) {
+  const before = state.activePlanId;
   const found = state.plans.find((p) => p.id === planId);
   state.activePlanId = (found || state.plans[0])?.id || null;
   if (state.activePlanId) localStorage.setItem(activePlanKey(), state.activePlanId);
+  // 換了計畫就把交易表單的預設勾選改成新的目前計畫（正在編輯某筆交易時不動）
+  if (state.activePlanId !== before && !editingTxId) renderTxPlans(null);
 }
 
 function tryApplyBackup(key) {
@@ -403,7 +407,7 @@ function computeStockFor(plan, stock) {
     withPercent,
     PortfolioMath.transactionsInPlan(state.transactions, plan?.id),
     state.quotes,
-    plan?.budget || DEFAULT_BUDGET
+    Number(plan?.budget) > 0 ? Number(plan.budget) : 0
   );
 }
 
@@ -448,7 +452,6 @@ async function switchPlan(planId) {
   if (planId === activePlan()?.id) return;
   selectPlan(planId);
   closePlanCard();
-  if (!editingTxId) renderTxPlans(null);
   render();
   await loadHistory();
 }
@@ -465,7 +468,7 @@ function renderPlanRows() {
     row.dataset.planId = p.id;
     row.innerHTML = `
       <input class="plan-row-name" type="text" maxlength="20" value="${esc(p.name)}" aria-label="計畫名稱" />
-      <input class="plan-row-budget" type="text" inputmode="decimal" value="${Number(p.budget) || 0}" aria-label="總預算" />
+      <input class="plan-row-budget" type="text" inputmode="decimal" value="${Number(p.budget) > 0 ? Number(p.budget) : ''}" placeholder="不設目標" aria-label="總預算" />
       <button type="button" class="btn btn-ghost plan-move" data-dir="-1" ${i === 0 ? 'disabled' : ''} aria-label="上移">↑</button>
       <button type="button" class="btn btn-ghost plan-move" data-dir="1" ${i === state.plans.length - 1 ? 'disabled' : ''} aria-label="下移">↓</button>
       <button type="button" class="btn btn-ghost plan-delete" ${state.plans.length < 2 ? 'disabled title="最後一個計畫不能刪除"' : ''}>刪除</button>`;
@@ -569,9 +572,14 @@ function initPlans() {
       if (!name) return (e.target.value = plan.name);
       plan.name = name;
     } else if (e.target.classList.contains('plan-row-budget')) {
-      const budget = parseDecimalInput(e.target.value);
-      if (!(budget > 0)) return (e.target.value = plan.budget);
-      plan.budget = budget;
+      // 清空＝改成純記錄型計畫；要填就必須是正數
+      const raw = e.target.value.trim();
+      if (raw === '') plan.budget = null;
+      else {
+        const budget = parseDecimalInput(raw);
+        if (!(budget > 0)) return (e.target.value = plan.budget ?? '');
+        plan.budget = budget;
+      }
     } else return;
     await savePortfolio();
     render();
@@ -614,9 +622,10 @@ function initPlans() {
     const copyAlloc = source && $('plan-copy-alloc').checked;
     const budgetRaw = $('plan-budget').value.trim();
     // 複製目標金額時，總預算欄留空就沿用來源的
-    const budget = budgetRaw === '' && copyAlloc ? source.budget : parseDecimalInput(budgetRaw);
+    // 留空＝不設目標的純記錄型計畫；若勾了複製目標金額則沿用來源
+    const budget = budgetRaw === '' ? (copyAlloc ? source.budget ?? null : null) : parseDecimalInput(budgetRaw);
     if (!name) return alert('請填計畫名稱');
-    if (!(budget > 0)) return alert('總預算必須是正數');
+    if (budget != null && !(budget > 0)) return alert('總預算留空即可，要填就必須是正數');
     const plan = {
       id: newPlanId(),
       name,
@@ -647,12 +656,16 @@ function render() {
   const anyValueMissing = rows.some((r) => r.valueTWD == null);
   const totalValue = anyValueMissing ? null : rows.reduce((s, r) => s + r.valueTWD, 0);
   const totalPnl = totalValue != null ? totalValue - totalInvested : null;
-  const overallProgress = totalInvested / planBudget();
+  const overallProgress = hasTarget() ? totalInvested / planBudget() : null;
 
-  $('subtitle').textContent = `總預算 ${fmtTWD(planBudget())} ・ ${state.stocks.length} 檔標的目標配置`;
+  $('subtitle').textContent = hasTarget()
+    ? `總預算 ${fmtTWD(planBudget())} ・ ${state.stocks.length} 檔標的目標配置`
+    : `純記錄型計畫 ・ 只記錄持股與損益，不設目標`;
 
   $('kpi-invested').textContent = fmtTWD(totalInvested);
-  $('kpi-invested-sub').textContent = '剩餘可投入 ' + fmtTWD(Math.max(planBudget() - totalInvested, 0));
+  $('kpi-invested-sub').textContent = hasTarget()
+    ? '剩餘可投入 ' + fmtTWD(Math.max(planBudget() - totalInvested, 0))
+    : '';
   $('kpi-value').textContent = fmtTWD(totalValue);
   $('kpi-value-sub').textContent = state.fetchedAt
     ? '報價時間 ' + new Date(state.fetchedAt).toLocaleString('zh-TW', { hour12: false })
@@ -671,14 +684,24 @@ function render() {
   realizedEl.className = 'kpi-value ' + pnlClass(totalRealized);
   $('kpi-realized-sub').textContent = totalDividends !== 0 ? '含股利 ' + fmtTWD(totalDividends) : '賣出損益＋股利';
 
-  $('kpi-progress').textContent = fmtPct(overallProgress);
-  $('kpi-progress-sub').textContent = '目標 ' + fmtTWD(planBudget());
-
-  $('overall-progress-label').textContent =
-    fmtTWD(totalInvested) + ' / ' + fmtTWD(planBudget()) + '（' + fmtPct(overallProgress) + '）';
-  const bar = $('overall-progress-bar');
-  bar.style.width = Math.min(overallProgress * 100, 100) + '%';
-  bar.classList.toggle('over', overallProgress > 1);
+  // 純記錄型計畫：達成率、進度條、再平衡都沒有意義，整塊收起來
+  $('kpi-progress-card').hidden = !hasTarget();
+  $('overall-progress-card').hidden = !hasTarget();
+  $('rebalance-card').hidden = !hasTarget();
+  $('basis-target-btn').hidden = !hasTarget();
+  if (!hasTarget() && chartBasis === 'target') {
+    chartBasis = 'value';
+    basisLocked = false;
+  }
+  if (hasTarget()) {
+    $('kpi-progress').textContent = fmtPct(overallProgress);
+    $('kpi-progress-sub').textContent = '目標 ' + fmtTWD(planBudget());
+    $('overall-progress-label').textContent =
+      fmtTWD(totalInvested) + ' / ' + fmtTWD(planBudget()) + '（' + fmtPct(overallProgress) + '）';
+    const bar = $('overall-progress-bar');
+    bar.style.width = Math.min(overallProgress * 100, 100) + '%';
+    bar.classList.toggle('over', overallProgress > 1);
+  }
 
   renderAllocationCollapsed();
   renderHoldings(rows, totalInvested, totalValue, totalPnl);
@@ -1113,7 +1136,7 @@ function renderHoldings(rows, totalInvested, totalValue, totalPnl) {
   $('holdings-foot').innerHTML = `
     <tr>
       <td>合計</td>
-      <td class="num">${fmtNum(totalPercent, 1)}%<span class="cell-sub">${fmtTWD(planBudget())}</span></td>
+      <td class="num">${hasTarget() ? `${fmtNum(totalPercent, 1)}%<span class="cell-sub">${fmtTWD(planBudget())}</span>` : '—'}</td>
       <td class="num"></td>
       <td class="num"></td>
       <td class="num">${fmtTWD(totalInvested)}</td>
@@ -1223,7 +1246,7 @@ function renderDonut(rows) {
     angle = a1;
   }
 
-  const centerNum = chartBasis === 'target' ? fmtTWD(planBudget()) : fmtTWD(total);
+  const centerNum = chartBasis === 'target' ? fmtTWD(planBudget() ?? 0) : fmtTWD(total);
   donutEl.innerHTML = `
     <svg viewBox="0 0 320 320" class="donut-svg" role="img" aria-label="資產類別配置圓餅圖">
       <defs>
@@ -1253,7 +1276,7 @@ function renderDonutLegend(ordered, colorMap, catOrder, basis, total) {
     const members = ordered.filter((r) => (r.stock.category || '未分類') === cat);
     const catValue = members.reduce((s, r) => s + basis.valueOf(r), 0);
     const catPct = total > 0 ? catValue / total : 0;
-    const legendValue = chartBasis === 'target' ? fmtTWD((planBudget() * catValue) / 100) : basis.fmtVal(catValue);
+    const legendValue = chartBasis === 'target' ? fmtTWD(((planBudget() ?? 0) * catValue) / 100) : basis.fmtVal(catValue);
     const memberHtml = members
       .map((r) => {
         const v = basis.valueOf(r);
@@ -1602,7 +1625,7 @@ function renderRebalance(rows, totalValue) {
   });
 
   const useValue = rebalanceBase === 'value' && totalValue != null && totalValue > 0;
-  const anchor = useValue ? totalValue : planBudget();
+  const anchor = useValue ? totalValue : planBudget() ?? 0;
   $('rebalance-note').textContent =
     rebalanceBase === 'value' && !useValue ? '（目前市值不可用，暫以總預算計算）' : '';
 
@@ -1806,7 +1829,9 @@ function rebalanceEditorPercents() {
 function openEditor() {
   // 標的基本資料全帳號共用，比例只改目前計畫的目標配置 — 欄位標題標明是哪個計畫
   $('editor-percent-head').textContent = `目標％（${activePlan()?.name || ''}）`;
-  $('edit-budget').value = planBudget();
+  $('editor-percent-head').hidden = !hasTarget();
+  $('edit-budget-field').hidden = !hasTarget();
+  $('edit-budget').value = planBudget() ?? '';
   refreshCategoryDatalist();
   const body = $('editor-body');
   body.innerHTML = '';
@@ -1860,15 +1885,16 @@ function saveEditor() {
     return;
   }
 
-  const total = stocks.reduce((s, x) => s + x.percent, 0);
-  if (Math.abs(total - 100) > 0.01 && !confirm(`比例合計是 ${fmtNum(total, 1)}%（不是 100%），仍要儲存嗎？`)) {
-    return;
-  }
-
   const plan = activePlan();
-  plan.budget = budget;
-  plan.allocations = {};
-  for (const s of stocks) if (s.percent > 0) plan.allocations[s.id] = s.percent;
+  if (hasTarget()) {
+    const total = stocks.reduce((s, x) => s + x.percent, 0);
+    if (Math.abs(total - 100) > 0.01 && !confirm(`比例合計是 ${fmtNum(total, 1)}%（不是 100%），仍要儲存嗎？`)) {
+      return;
+    }
+    plan.budget = budget;
+    plan.allocations = {};
+    for (const s of stocks) if (s.percent > 0) plan.allocations[s.id] = s.percent;
+  }
   state.stocks = sortedByTargetPercent(stocks).map(({ percent, ...rest }) => rest);
   savePortfolio();
   rebuildStockSelect();
