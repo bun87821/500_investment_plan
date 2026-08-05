@@ -899,3 +899,60 @@ tfoot td {
   height: 24px;
   border-radius: 50%;
 }
+
+/* ---- 計畫分頁列 ---- */
+.plan-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.plan-tab-list {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex: 1;
+}
+.plan-tab-list::-webkit-scrollbar { display: none; }
+.plan-tab {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.plan-tab:hover { color: var(--text-primary); }
+.plan-tab.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--series-1);
+  font-weight: 600;
+}
+.plan-tab-gear {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 6px 8px;
+}
+.plan-tab-gear:hover { color: var(--text-primary); }
+.plan-form { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.plan-form label { display: flex; flex-direction: column; gap: 4px; font-size: 0.8rem; color: var(--text-secondary); }
+.plan-form input {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--page);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.9rem;
+}
+.plan-form-actions { display: flex; gap: 8px; }

@@ -185,3 +185,80 @@ test('端對端：已實現損益、歷史回推圖、XIRR、編輯與 CSV 匯�
 
   assert.deepEqual(jsErrors, [], 'JS errors: ' + jsErrors.join('; '));
 });
+
+test('端對端：計畫分頁切換後數字跟著換，重新載入回到上次的分頁', { timeout: 120_000 }, async (t) => {
+  const srv = await startServer();
+  const browser = await chromium.launch({ executablePath: chromiumPath, timeout: 30_000 });
+  t.after(async () => {
+    await browser.close();
+    srv.stop();
+  });
+
+  const page = await browser.newPage({ viewport: { width: 1280, height: 1200 } });
+  const jsErrors = [];
+  page.on('pageerror', (e) => jsErrors.push(e.message));
+  page.on('dialog', (d) => d.accept());
+  await page.route('**/api/quotes*', (r) => r.fulfill({ json: mockQuotes() }));
+  await page.route('**/api/history*', (r) => {
+    const u = new URL(r.request().url());
+    r.fulfill({ json: mockHistory(u.searchParams.get('symbols').split(',')) });
+  });
+
+  // 舊格式資料（沒有 plans）→ 遷移成單一「主要計畫」，總預算預設 500 萬
+  await fetch(srv.url + '/api/portfolio', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rev: 0, transactions: TXS }),
+  });
+
+  await page.goto(srv.url);
+  await page.waitForFunction(() => document.querySelectorAll('.plan-tab').length > 0, { timeout: 15000 });
+
+  assert.deepEqual(await page.locator('.plan-tab').allTextContents(), ['主要計畫']);
+  assert.ok((await page.textContent('#subtitle')).includes('NT$5,000,000'));
+  const investedMain = await page.textContent('#kpi-invested');
+  assert.notEqual(investedMain, 'NT$0', '主要計畫應有已投入成本');
+
+  // 新增「信貸」計畫（總預算 150 萬）
+  await page.click('#plan-manage-btn');
+  await page.fill('#plan-name', '信貸');
+  await page.fill('#plan-budget', '1500000');
+  await page.click('#plan-form button[type="submit"]');
+  await page.waitForFunction(() => document.querySelectorAll('.plan-tab').length === 2, { timeout: 10000 });
+
+  // 自動切到新分頁：總預算換成 150 萬、已投入成本歸零（新計畫還沒有交易）
+  assert.equal(await page.textContent('.plan-tab.active'), '信貸');
+  assert.ok((await page.textContent('#subtitle')).includes('NT$1,500,000'));
+  assert.equal(await page.textContent('#kpi-invested'), 'NT$0');
+  assert.equal(await page.locator('#tx-body tr').count(), 0, '信貸分頁不應看到主要計畫的交易');
+
+  // 切回主要計畫：數字回來
+  await page.click('.plan-tab:has-text("主要計畫")');
+  await page.waitForTimeout(400);
+  assert.ok((await page.textContent('#subtitle')).includes('NT$5,000,000'));
+  assert.equal(await page.textContent('#kpi-invested'), investedMain);
+
+  // 重新載入回到上次看的分頁
+  await page.click('.plan-tab:has-text("信貸")');
+  await page.waitForTimeout(400);
+  await page.reload();
+  await page.waitForFunction(() => document.querySelectorAll('.plan-tab').length === 2, { timeout: 15000 });
+  assert.equal(await page.textContent('.plan-tab.active'), '信貸');
+
+  // 在信貸分頁新增的交易只屬於信貸
+  await page.selectOption('#tx-stock', '2330');
+  await page.fill('#tx-shares', '50');
+  await page.fill('#tx-price', '1000');
+  await page.click('#tx-submit');
+  await page.waitForTimeout(500);
+  assert.equal(await page.locator('#tx-body tr').count(), 1);
+
+  const saved = await (await fetch(srv.url + '/api/portfolio')).json();
+  assert.equal(saved.plans.length, 2);
+  assert.equal(saved.plans[1].name, '信貸');
+  assert.equal(saved.plans[1].budget, 1_500_000);
+  const added = saved.transactions.find((x) => x.shares === 50);
+  assert.deepEqual(added.plans, ['plan-2']);
+
+  assert.deepEqual(jsErrors, [], 'JS errors: ' + jsErrors.join('; '));
+});

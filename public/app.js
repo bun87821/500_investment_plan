@@ -57,8 +57,8 @@ const BASIS = {
 const fxSymbolOf = PortfolioMath.fxSymbolOf;
 
 const state = {
-  budget: DEFAULT_BUDGET,
   plans: [], // 具名投資規劃 { id, name, budget, allocations }；載入時由遷移保證至少有一個
+  activePlanId: null, // 目前計畫（分頁）
   stocks: DEFAULT_STOCKS,
   transactions: [],
   snapshots: [],
@@ -75,6 +75,13 @@ const state = {
 
 // 各使用者在瀏覽器端的備份各自存一份；訪客（未登入）模式的正式儲存位置就是這裡
 const backupKey = () => 'portfolio-backup:' + (state.user?.sub || 'local');
+// 目前計畫記在瀏覽器，依使用者分開
+const activePlanKey = () => 'active-plan:' + (state.user?.sub || 'local');
+
+// 目前計畫，以及「只屬於它」的交易與總預算——畫面上所有計算都經過這三個入口
+const activePlan = () => state.plans.find((p) => p.id === state.activePlanId) || state.plans[0] || null;
+const planBudget = () => activePlan()?.budget || DEFAULT_BUDGET;
+const planTxs = () => PortfolioMath.transactionsInPlan(state.transactions, activePlan()?.id);
 
 // 啟用登入但尚未登入 → 訪客模式：資料只存瀏覽器 localStorage，不打伺服器
 const isGuest = () => state.authEnabled && !state.user;
@@ -127,7 +134,14 @@ function applyDoc(raw) {
       category: s.category || DEFAULT_STOCKS.find((d) => d.id === s.id)?.category || '未分類',
     }));
   }
-  if (Number(data.budget) > 0) state.budget = Number(data.budget);
+  selectPlan(localStorage.getItem(activePlanKey()));
+}
+
+// 切到指定計畫；找不到（例如已被刪除）就退回第一個計畫
+function selectPlan(planId) {
+  const found = state.plans.find((p) => p.id === planId);
+  state.activePlanId = (found || state.plans[0])?.id || null;
+  if (state.activePlanId) localStorage.setItem(activePlanKey(), state.activePlanId);
 }
 
 function tryApplyBackup(key) {
@@ -146,7 +160,8 @@ function tryApplyBackup(key) {
 // 完全沒有資料可套用時（訪客且無備份）applyDoc 不會跑到，這裡補上預設計畫
 function ensurePlans() {
   if (!state.plans.length) {
-    state.plans = PortfolioMath.migratePortfolio({ budget: state.budget, stocks: state.stocks }).plans;
+    state.plans = PortfolioMath.migratePortfolio({ stocks: state.stocks }).plans;
+    selectPlan(localStorage.getItem(activePlanKey()));
   }
 }
 
@@ -178,7 +193,6 @@ async function loadPortfolio() {
 
 async function savePortfolio({ includeSnapshots = false } = {}) {
   const backup = {
-    budget: state.budget,
     plans: state.plans,
     stocks: state.stocks,
     transactions: state.transactions,
@@ -186,7 +200,6 @@ async function savePortfolio({ includeSnapshots = false } = {}) {
     ignoredEvents: state.ignoredEvents,
   };
   const payload = {
-    budget: state.budget,
     plans: state.plans,
     stocks: state.stocks,
     transactions: state.transactions,
@@ -321,6 +334,7 @@ function renderAlerts() {
           date: a.date,
           kind: 'split',
           ratio: a.ratio,
+          plans: [activePlan().id],
         });
         await savePortfolio();
         render();
@@ -367,7 +381,7 @@ function fxRate(currency) {
 
 // 平均成本重放的實作在 portfolio-math.js；這裡只把 state 轉接成純函式參數
 function computeStock(stock) {
-  return PortfolioMath.computeStock(stock, state.transactions, state.quotes, state.budget);
+  return PortfolioMath.computeStock(stock, planTxs(), state.quotes, planBudget());
 }
 
 function sortedByTargetPercent(items, stockOf = (x) => x) {
@@ -390,20 +404,88 @@ function todayTaipei() {
   }).format(new Date());
 }
 
+// ---------- 計畫分頁 ----------
+
+function renderPlanTabs() {
+  const list = $('plan-tab-list');
+  list.innerHTML = '';
+  for (const p of state.plans) {
+    const btn = document.createElement('button');
+    btn.className = 'plan-tab' + (p.id === activePlan()?.id ? ' active' : '');
+    btn.textContent = p.name;
+    btn.dataset.planId = p.id;
+    btn.setAttribute('aria-current', p.id === activePlan()?.id ? 'page' : 'false');
+    list.appendChild(btn);
+  }
+}
+
+// 切換分頁：換一組篩過的交易重跑同一套計算，歷史區間也要跟著重抓
+async function switchPlan(planId) {
+  if (planId === activePlan()?.id) return;
+  selectPlan(planId);
+  closePlanCard();
+  render();
+  await loadHistory();
+}
+
+function openPlanCard() {
+  $('plan-name').value = '';
+  $('plan-budget').value = '';
+  $('plan-card').hidden = false;
+  $('plan-name').focus();
+}
+
+function closePlanCard() {
+  $('plan-card').hidden = true;
+}
+
+// 計畫識別碼不隨名稱改變，取最小的未使用序號
+function newPlanId() {
+  const used = new Set(state.plans.map((p) => p.id));
+  for (let i = 1; ; i++) if (!used.has('plan-' + i)) return 'plan-' + i;
+}
+
+function initPlans() {
+  $('plan-tab-list').addEventListener('click', (e) => {
+    const btn = e.target.closest('.plan-tab');
+    if (btn) switchPlan(btn.dataset.planId);
+  });
+  $('plan-manage-btn').addEventListener('click', () => {
+    if ($('plan-card').hidden) openPlanCard();
+    else closePlanCard();
+  });
+  $('plan-cancel').addEventListener('click', closePlanCard);
+  $('plan-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = $('plan-name').value.trim();
+    const budget = parseDecimalInput($('plan-budget').value);
+    if (!name) return alert('請填計畫名稱');
+    if (!(budget > 0)) return alert('總預算必須是正數');
+    const plan = { id: newPlanId(), name, budget, allocations: {} };
+    state.plans.push(plan);
+    selectPlan(plan.id);
+    closePlanCard();
+    await savePortfolio();
+    render();
+    await loadHistory();
+  });
+}
+
 // ---------- 畫面 ----------
 function render() {
+  renderPlanTabs();
   const rows = sortedByTargetPercent(state.stocks.map(computeStock), (r) => r.stock);
 
   const totalInvested = rows.reduce((s, r) => s + (r.invested ?? 0), 0);
   const anyValueMissing = rows.some((r) => r.valueTWD == null);
   const totalValue = anyValueMissing ? null : rows.reduce((s, r) => s + r.valueTWD, 0);
   const totalPnl = totalValue != null ? totalValue - totalInvested : null;
-  const overallProgress = totalInvested / state.budget;
+  const overallProgress = totalInvested / planBudget();
 
-  $('subtitle').textContent = `總預算 ${fmtTWD(state.budget)} ・ ${state.stocks.length} 檔標的目標配置`;
+  $('subtitle').textContent = `總預算 ${fmtTWD(planBudget())} ・ ${state.stocks.length} 檔標的目標配置`;
 
   $('kpi-invested').textContent = fmtTWD(totalInvested);
-  $('kpi-invested-sub').textContent = '剩餘可投入 ' + fmtTWD(Math.max(state.budget - totalInvested, 0));
+  $('kpi-invested-sub').textContent = '剩餘可投入 ' + fmtTWD(Math.max(planBudget() - totalInvested, 0));
   $('kpi-value').textContent = fmtTWD(totalValue);
   $('kpi-value-sub').textContent = state.fetchedAt
     ? '報價時間 ' + new Date(state.fetchedAt).toLocaleString('zh-TW', { hour12: false })
@@ -423,10 +505,10 @@ function render() {
   $('kpi-realized-sub').textContent = totalDividends !== 0 ? '含股利 ' + fmtTWD(totalDividends) : '賣出損益＋股利';
 
   $('kpi-progress').textContent = fmtPct(overallProgress);
-  $('kpi-progress-sub').textContent = '目標 ' + fmtTWD(state.budget);
+  $('kpi-progress-sub').textContent = '目標 ' + fmtTWD(planBudget());
 
   $('overall-progress-label').textContent =
-    fmtTWD(totalInvested) + ' / ' + fmtTWD(state.budget) + '（' + fmtPct(overallProgress) + '）';
+    fmtTWD(totalInvested) + ' / ' + fmtTWD(planBudget()) + '（' + fmtPct(overallProgress) + '）';
   const bar = $('overall-progress-bar');
   bar.style.width = Math.min(overallProgress * 100, 100) + '%';
   bar.classList.toggle('over', overallProgress > 1);
@@ -495,12 +577,13 @@ let benchmarkOn = localStorage.getItem('benchmark-on') === '1';
 const HIST_DISPLAY_DAYS = { '1mo': 31, '3mo': 93, '6mo': 186, '1y': 372, all: Infinity };
 
 async function loadHistory() {
-  const held = state.stocks.filter((s) => state.transactions.some((t) => t.stockId === s.id));
+  const txs = planTxs();
+  const held = state.stocks.filter((s) => txs.some((t) => t.stockId === s.id));
   if (!held.length) {
     state.history = null;
     return;
   }
-  const firstTx = state.transactions.reduce((min, t) => (t.date < min ? t.date : min), '9999');
+  const firstTx = txs.reduce((min, t) => (t.date < min ? t.date : min), '9999');
   const days = (Date.now() - new Date(firstTx).getTime()) / 86400_000;
   const range =
     days <= 25 ? '1mo' : days <= 85 ? '3mo' : days <= 175 ? '6mo' : days <= 360 ? '1y' : days <= 720 ? '2y' : days <= 1800 ? '5y' : 'max';
@@ -524,9 +607,9 @@ function computeDailySeries() {
   return PortfolioMath.computeDailySeries({
     history: state.history,
     stocks: state.stocks,
-    transactions: state.transactions,
+    transactions: planTxs(),
     quotes: state.quotes,
-    budget: state.budget,
+    budget: planBudget(),
     benchSymbol: BENCH_SYMBOL,
     today: todayTaipei(),
   });
@@ -537,7 +620,7 @@ function computeXirr(rows) {
   return PortfolioMath.computeXirr({
     rows,
     stocks: state.stocks,
-    transactions: state.transactions,
+    transactions: planTxs(),
     quotes: state.quotes,
     today: todayTaipei(),
   });
@@ -560,7 +643,7 @@ function getChartSeries() {
     };
   }
   const snaps = state.snapshots
-    .filter((s) => s.totalValue != null)
+    .filter((s) => s.totalValue != null && (!s.planId || s.planId === activePlan()?.id))
     .sort((a, b) => String(a.date).localeCompare(String(b.date)));
   if (!snaps.length) return null;
   return {
@@ -864,7 +947,7 @@ function renderHoldings(rows, totalInvested, totalValue, totalPnl) {
   $('holdings-foot').innerHTML = `
     <tr>
       <td>合計</td>
-      <td class="num">${fmtNum(totalPercent, 1)}%<span class="cell-sub">${fmtTWD(state.budget)}</span></td>
+      <td class="num">${fmtNum(totalPercent, 1)}%<span class="cell-sub">${fmtTWD(planBudget())}</span></td>
       <td class="num"></td>
       <td class="num"></td>
       <td class="num">${fmtTWD(totalInvested)}</td>
@@ -974,7 +1057,7 @@ function renderDonut(rows) {
     angle = a1;
   }
 
-  const centerNum = chartBasis === 'target' ? fmtTWD(state.budget) : fmtTWD(total);
+  const centerNum = chartBasis === 'target' ? fmtTWD(planBudget()) : fmtTWD(total);
   donutEl.innerHTML = `
     <svg viewBox="0 0 320 320" class="donut-svg" role="img" aria-label="資產類別配置圓餅圖">
       <defs>
@@ -1004,7 +1087,7 @@ function renderDonutLegend(ordered, colorMap, catOrder, basis, total) {
     const members = ordered.filter((r) => (r.stock.category || '未分類') === cat);
     const catValue = members.reduce((s, r) => s + basis.valueOf(r), 0);
     const catPct = total > 0 ? catValue / total : 0;
-    const legendValue = chartBasis === 'target' ? fmtTWD((state.budget * catValue) / 100) : basis.fmtVal(catValue);
+    const legendValue = chartBasis === 'target' ? fmtTWD((planBudget() * catValue) / 100) : basis.fmtVal(catValue);
     const memberHtml = members
       .map((r) => {
         const v = basis.valueOf(r);
@@ -1069,7 +1152,7 @@ function bindDonutTooltip() {
 function renderTransactions() {
   const body = $('tx-body');
   body.innerHTML = '';
-  const sorted = [...state.transactions].sort((a, b) => (a.date < b.date ? 1 : -1));
+  const sorted = [...planTxs()].sort((a, b) => (a.date < b.date ? 1 : -1));
   for (const t of sorted) {
     const stock = state.stocks.find((s) => s.id === t.stockId);
     const isDiv = t.kind === 'dividend';
@@ -1139,7 +1222,7 @@ function toggleMonthlyDetail(row, month) {
     return;
   }
   document.querySelectorAll('.monthly-detail').forEach((el) => el.remove());
-  const txs = state.transactions
+  const txs = planTxs()
     .filter((t) => String(t.date).slice(0, 7) === month)
     .sort((a, b) => String(a.date).localeCompare(String(b.date)));
   const tr = document.createElement('tr');
@@ -1299,7 +1382,7 @@ async function importCsv(text) {
   if (!confirm(msg)) return;
 
   for (const rec of imported) {
-    state.transactions.push({ ...rec, id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6) });
+    state.transactions.push({ ...rec, plans: [activePlan().id], id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6) });
   }
   await savePortfolio();
   render();
@@ -1315,7 +1398,7 @@ function renderRebalance(rows, totalValue) {
   });
 
   const useValue = rebalanceBase === 'value' && totalValue != null && totalValue > 0;
-  const anchor = useValue ? totalValue : state.budget;
+  const anchor = useValue ? totalValue : planBudget();
   $('rebalance-note').textContent =
     rebalanceBase === 'value' && !useValue ? '（目前市值不可用，暫以總預算計算）' : '';
 
@@ -1517,7 +1600,7 @@ function rebalanceEditorPercents() {
 }
 
 function openEditor() {
-  $('edit-budget').value = state.budget;
+  $('edit-budget').value = planBudget();
   refreshCategoryDatalist();
   const body = $('editor-body');
   body.innerHTML = '';
@@ -1576,7 +1659,7 @@ function saveEditor() {
     return;
   }
 
-  state.budget = budget;
+  activePlan().budget = budget;
   state.stocks = sortedByTargetPercent(stocks);
   savePortfolio();
   rebuildStockSelect();
@@ -1658,9 +1741,9 @@ function initForm() {
 
     if (editingTxId) {
       const idx = state.transactions.findIndex((t) => t.id === editingTxId);
-      if (idx >= 0) state.transactions[idx] = { ...record, id: editingTxId };
+      if (idx >= 0) state.transactions[idx] = { ...state.transactions[idx], ...record, id: editingTxId };
     } else {
-      state.transactions.push({ ...record, id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6) });
+      state.transactions.push({ ...record, plans: [activePlan().id], id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6) });
     }
     await savePortfolio();
     resetTxForm();
@@ -1729,7 +1812,7 @@ function initForm() {
         upsertLocalSnapshot(data.snapshot);
         if (data.rev !== undefined) state.rev = Number(data.rev) || state.rev; // 伺服器已寫入，同步版本號
         localStorage.setItem(backupKey(), JSON.stringify({
-          budget: state.budget,
+          plans: state.plans,
           stocks: state.stocks,
           transactions: state.transactions,
           snapshots: state.snapshots,
@@ -1786,7 +1869,7 @@ function initForm() {
   }
 
   $('export-btn').addEventListener('click', () => {
-    const doc = { budget: state.budget, plans: state.plans, stocks: state.stocks, transactions: state.transactions, snapshots: state.snapshots };
+    const doc = { plans: state.plans, stocks: state.stocks, transactions: state.transactions, snapshots: state.snapshots };
     const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -1854,8 +1937,8 @@ async function onGoogleCredential(response) {
     state.user = data.user;
     $('login-view').hidden = true;
     // 換人了：先回到預設狀態再載入帳號資料，避免訪客資料和帳號資料混在一起
-    state.budget = DEFAULT_BUDGET;
     state.plans = [];
+    state.activePlanId = null;
     state.stocks = DEFAULT_STOCKS;
     state.transactions = [];
     state.snapshots = [];
@@ -1920,6 +2003,7 @@ function watchOnlineStatus() {
   watchOnlineStatus();
   initForm();
   initEditor();
+  initPlans();
   $('logout-btn').addEventListener('click', async () => {
     await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
     location.reload();

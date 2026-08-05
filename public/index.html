@@ -47,6 +47,29 @@
 
     <div id="app-main" class="app-main" hidden>
 
+    <nav class="plan-tabs" aria-label="投資計畫">
+      <div class="plan-tab-list" id="plan-tab-list"></div>
+      <button id="plan-manage-btn" class="plan-tab-gear" title="管理計畫" aria-label="管理計畫">⚙</button>
+    </nav>
+
+    <section class="card" id="plan-card" hidden>
+      <h2>管理計畫</h2>
+      <form id="plan-form" class="plan-form">
+        <label>
+          計畫名稱
+          <input type="text" id="plan-name" maxlength="20" placeholder="例如：信貸" required />
+        </label>
+        <label>
+          總預算（台幣）
+          <input type="text" id="plan-budget" inputmode="decimal" placeholder="1500000" required />
+        </label>
+        <div class="plan-form-actions">
+          <button type="submit" class="btn btn-primary">新增計畫</button>
+          <button type="button" id="plan-cancel" class="btn">關閉</button>
+        </div>
+      </form>
+    </section>
+
     <section class="kpi-row" id="kpi-row">
       <div class="kpi">
         <div class="kpi-label">已投入成本</div>
