@@ -540,6 +540,9 @@ h1 {
   .tx-form {
     gap: 9px;
   }
+  .tx-form-actions {
+    flex-direction: column;
+  }
   .editor-foot .btn,
   .tx-form .btn {
     width: 100%;
@@ -844,12 +847,18 @@ tfoot td {
 
 .grid-2 {
   display: grid;
-  grid-template-columns: minmax(280px, 340px) 1fr;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   align-items: start;
 }
-@media (max-width: 860px) {
-  .grid-2 { grid-template-columns: 1fr; }
+.grid-2 > .card {
+  min-width: 0;
+  width: 100%;
+}
+@media (min-width: 1040px) {
+  .grid-2 {
+    grid-template-columns: minmax(320px, 360px) minmax(0, 1fr);
+  }
 }
 
 .tx-form { display: flex; flex-direction: column; gap: 10px; }
@@ -864,6 +873,8 @@ tfoot td {
   border: 1px solid var(--baseline);
   border-radius: var(--radius);
   min-height: 38px;
+  min-width: 0;
+  width: 100%;
   padding: 8px 10px;
   font-size: 0.9rem;
   background: var(--surface-raised);
@@ -924,7 +935,7 @@ tfoot td {
 .monthly-row:hover td { background: rgba(128, 128, 128, 0.08); }
 .monthly-detail-cell { font-size: 0.85rem; opacity: 0.85; padding: 6px 10px 10px; }
 
-.tx-form-actions { display: flex; gap: 8px; }
+.tx-form-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .tx-form-actions .btn-primary { flex: 1; }
 
 /* 再平衡建議：依台灣券商慣例 買紅、賣綠 */
@@ -1140,6 +1151,7 @@ tfoot td {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
   font-size: 0.85rem;
   color: var(--text-primary);
   cursor: pointer;
