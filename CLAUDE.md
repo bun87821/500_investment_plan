@@ -17,7 +17,7 @@ npm test     # API 測試（node:test）＋ Playwright 端對端測試
   - `index.html` + `app.js` + `style.css` — 畫面與互動
   - `portfolio-math.js` — 前後端共用的計算模組（平均成本、分割重放、XIRR、歷史回推、月報、提醒偵測）
   - `manifest.json` + `sw.js` + `icon-*.png` — PWA（可安裝、離線唯讀）
-- `tests/` — `api.test.js`（API）、`e2e.test.js`（Playwright）、`helpers.js`
+- `tests/` — `portfolio-math.test.js`（計算模組單元測試）、`api.test.js`（API）、`e2e.test.js`（Playwright）、`helpers.js`
 - 領域詞彙見 `CONTEXT.md`；架構決策紀錄放 `docs/adr/`
 
 ## Agent skills

@@ -185,3 +185,205 @@ test('端對端：已實現損益、歷史回推圖、XIRR、編輯與 CSV 匯�
 
   assert.deepEqual(jsErrors, [], 'JS errors: ' + jsErrors.join('; '));
 });
+
+test('端對端：計畫分頁切換後數字跟著換，重新載入回到上次的分頁', { timeout: 120_000 }, async (t) => {
+  const srv = await startServer();
+  const browser = await chromium.launch({ executablePath: chromiumPath, timeout: 30_000 });
+  t.after(async () => {
+    await browser.close();
+    srv.stop();
+  });
+
+  const page = await browser.newPage({ viewport: { width: 1280, height: 1200 } });
+  const jsErrors = [];
+  page.on('pageerror', (e) => jsErrors.push(e.message));
+  page.on('dialog', (d) => d.accept());
+  await page.route('**/api/quotes*', (r) => r.fulfill({ json: mockQuotes() }));
+  await page.route('**/api/history*', (r) => {
+    const u = new URL(r.request().url());
+    r.fulfill({ json: mockHistory(u.searchParams.get('symbols').split(',')) });
+  });
+
+  // 舊格式資料（沒有 plans）→ 遷移成單一「主要計畫」，總預算預設 500 萬
+  await fetch(srv.url + '/api/portfolio', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rev: 0, transactions: TXS }),
+  });
+
+  await page.goto(srv.url);
+  await page.waitForFunction(() => document.querySelectorAll('.plan-tab').length > 0, { timeout: 15000 });
+
+  assert.deepEqual(await page.locator('.plan-tab').allTextContents(), ['主要計畫']);
+  assert.ok((await page.textContent('#subtitle')).includes('NT$5,000,000'));
+  const investedMain = await page.textContent('#kpi-invested');
+  assert.notEqual(investedMain, 'NT$0', '主要計畫應有已投入成本');
+
+  // 新增「信貸」計畫（總預算 150 萬）
+  await page.click('#plan-manage-btn');
+  await page.fill('#plan-name', '信貸');
+  await page.fill('#plan-budget', '1500000');
+  await page.click('#plan-form button[type="submit"]');
+  await page.waitForFunction(() => document.querySelectorAll('.plan-tab').length === 2, { timeout: 10000 });
+
+  // 自動切到新分頁：總預算換成 150 萬、已投入成本歸零（新計畫還沒有交易）
+  assert.equal(await page.textContent('.plan-tab.active'), '信貸');
+  assert.ok((await page.textContent('#subtitle')).includes('NT$1,500,000'));
+  assert.equal(await page.textContent('#kpi-invested'), 'NT$0');
+  assert.equal(await page.locator('#tx-body tr').count(), 0, '信貸分頁不應看到主要計畫的交易');
+
+  // 切回主要計畫：數字回來
+  await page.click('.plan-tab:has-text("主要計畫")');
+  await page.waitForTimeout(400);
+  assert.ok((await page.textContent('#subtitle')).includes('NT$5,000,000'));
+  assert.equal(await page.textContent('#kpi-invested'), investedMain);
+
+  // 重新載入回到上次看的分頁
+  await page.click('.plan-tab:has-text("信貸")');
+  await page.waitForTimeout(400);
+  await page.reload();
+  await page.waitForFunction(() => document.querySelectorAll('.plan-tab').length === 2, { timeout: 15000 });
+  assert.equal(await page.textContent('.plan-tab.active'), '信貸');
+
+  // 在信貸分頁新增的交易只屬於信貸
+  await page.selectOption('#tx-stock', '2330');
+  await page.fill('#tx-shares', '50');
+  await page.fill('#tx-price', '1000');
+  await page.click('#tx-submit');
+  await page.waitForTimeout(500);
+  assert.equal(await page.locator('#tx-body tr').count(), 1);
+
+  // --- 一筆交易掛多個計畫：兩個分頁都看得到 ---
+  const mainTxCount = await (async () => {
+    await page.click('.plan-tab:has-text("主要計畫")');
+    await page.waitForTimeout(300);
+    const n = await page.locator('#tx-body tr').count();
+    await page.click('.plan-tab:has-text("信貸")');
+    await page.waitForTimeout(300);
+    return n;
+  })();
+
+  await page.selectOption('#tx-stock', 'TSM');
+  await page.fill('#tx-shares', '10');
+  await page.fill('#tx-price', '230');
+  await page.locator('#tx-plans input').first().check(); // 也勾主要計畫
+  assert.ok(await page.locator('#tx-plans-hint').isVisible(), '勾選兩個計畫時應出現重複計入的提示');
+  // 回歸：畫面重繪（切圖表範圍、更新報價…）不得把已勾好的計畫沖掉
+  await page.click('#hist-range-control button[data-range="1mo"]');
+  await page.waitForTimeout(300);
+  assert.equal(await page.locator('#tx-plans input:checked').count(), 2, '重繪後勾選應保留');
+  await page.click('#hist-range-control button[data-range="all"]');
+  await page.waitForTimeout(300);
+  await page.click('#tx-submit');
+  await page.waitForTimeout(500);
+  assert.equal(await page.locator('#tx-body tr').count(), 2, '信貸應看到這筆');
+
+  await page.click('.plan-tab:has-text("主要計畫")');
+  await page.waitForTimeout(400);
+  assert.equal(await page.locator('#tx-body tr').count(), mainTxCount + 1, '主要計畫也應看到同一筆');
+  await page.click('.plan-tab:has-text("信貸")');
+  await page.waitForTimeout(300);
+
+  // --- 目標配置比例跟著計畫走 ---
+  await page.click('#edit-stocks-btn');
+  assert.ok((await page.textContent('#editor-percent-head')).includes('信貸'), '比例欄標題應標明目前計畫');
+  // 信貸只排台積電 40%，其餘留 0
+  const percentInputs = page.locator('#editor-body .e-percent');
+  const rowCount = await percentInputs.count();
+  for (let i = 0; i < rowCount; i++) await percentInputs.nth(i).fill(i === 0 ? '40' : '0');
+  await page.click('#editor-save');
+  await page.waitForTimeout(500);
+  const creditFoot = await page.textContent('#holdings-foot');
+  assert.ok(creditFoot.includes('40%'), '信貸的目標比例合計應是 40%，實際：' + creditFoot);
+
+  // 切回主要計畫：比例是它自己那一套（預設合計 100%）
+  await page.click('.plan-tab:has-text("主要計畫")');
+  await page.waitForTimeout(400);
+  assert.ok((await page.textContent('#holdings-foot')).includes('100%'), '主要計畫的比例不應被信貸的修改影響');
+
+  const saved = await (await fetch(srv.url + '/api/portfolio')).json();
+  assert.equal(saved.plans.length, 2);
+  assert.deepEqual(saved.plans[1].allocations, { '2330': 40 });
+  assert.equal(Object.keys(saved.plans[0].allocations).length, 12, '主要計畫仍有自己的 12 檔目標配置');
+  assert.equal(saved.plans[1].name, '信貸');
+  assert.equal(saved.plans[1].budget, 1_500_000);
+  const creditPlanId = saved.plans[1].id;
+  const added = saved.transactions.find((x) => x.shares === 50);
+  assert.deepEqual(added.plans, [creditPlanId]);
+  const shared = saved.transactions.find((x) => x.shares === 10 && x.stockId === 'TSM');
+  assert.deepEqual([...shared.plans].sort(), ['plan-1', creditPlanId].sort());
+
+  // --- 管理計畫：改名、改總預算、調順序、刪除 ---
+  await page.click('#plan-manage-btn');
+  const creditRow = page.locator(`.plan-row[data-plan-id="${creditPlanId}"]`);
+  await creditRow.locator('.plan-row-name').fill('信貸操作');
+  await creditRow.locator('.plan-row-name').blur();
+  await creditRow.locator('.plan-row-budget').fill('2000000');
+  await creditRow.locator('.plan-row-budget').blur();
+  await page.waitForTimeout(400);
+  assert.deepEqual(await page.locator('.plan-tab').allTextContents(), ['主要計畫', '信貸操作']);
+
+  // 上移 → 分頁順序對調
+  await page.locator(`.plan-row[data-plan-id="${creditPlanId}"] .plan-move[data-dir="-1"]`).click();
+  await page.waitForTimeout(400);
+  assert.deepEqual(await page.locator('.plan-tab').allTextContents(), ['信貸操作', '主要計畫']);
+
+  // 改後的總預算生效
+  await page.click('.plan-tab:has-text("信貸操作")');
+  await page.waitForTimeout(400);
+  assert.ok((await page.textContent('#subtitle')).includes('NT$2,000,000'));
+
+  // 刪除：先看到會連帶刪幾筆，名稱打對才能按
+  await page.click('#plan-manage-btn');
+  await page.locator(`.plan-row[data-plan-id="${creditPlanId}"] .plan-delete`).click();
+  const confirmText = await page.textContent('.plan-confirm');
+  assert.ok(confirmText.includes('1'), '應顯示只屬於這個計畫的交易筆數：' + confirmText);
+  assert.ok(await page.locator('#plan-confirm-btn').isDisabled(), '名稱還沒打對前不能刪');
+  await page.fill('#plan-confirm-input', '信貸');
+  assert.ok(await page.locator('#plan-confirm-btn').isDisabled(), '名稱不完全相符仍不能刪');
+  await page.fill('#plan-confirm-input', '信貸操作');
+  assert.ok(await page.locator('#plan-confirm-btn').isEnabled());
+  await page.click('#plan-confirm-btn');
+  await page.waitForTimeout(600);
+
+  assert.deepEqual(await page.locator('.plan-tab').allTextContents(), ['主要計畫']);
+  const after = await (await fetch(srv.url + '/api/portfolio')).json();
+  assert.equal(after.plans.length, 1);
+  assert.equal(after.transactions.some((x) => x.shares === 50), false, '只屬於它的交易應一併刪除');
+  const stillShared = after.transactions.find((x) => x.shares === 10 && x.stockId === 'TSM');
+  assert.deepEqual(stillShared.plans, ['plan-1'], '共用的交易保留，只掉標籤');
+
+  // --- 從既有計畫複製 ---
+  const mainRows = await page.locator('#tx-body tr').count();
+  const mainInvested = await page.textContent('#kpi-invested');
+  const mainTxTotal = after.transactions.length;
+
+  await page.click('#plan-manage-btn');
+  await page.fill('#plan-name', '退休');
+  await page.selectOption('#plan-copy-from', 'plan-1');
+  await page.check('#plan-copy-txs');
+  assert.ok(await page.locator('#plan-copy-hint').isVisible(), '複製交易時應提示投入金額會重複出現');
+  await page.click('#plan-form button[type="submit"]');
+  await page.waitForFunction(() => document.querySelectorAll('.plan-tab').length === 2, { timeout: 10000 });
+
+  // 新計畫沿用來源的總預算與配置，且有一份一模一樣的交易副本
+  assert.equal(await page.textContent('.plan-tab.active'), '退休');
+  assert.ok((await page.textContent('#subtitle')).includes('NT$5,000,000'));
+  assert.equal(await page.locator('#tx-body tr').count(), mainRows);
+  assert.equal(await page.textContent('#kpi-invested'), mainInvested);
+
+  const copied = await (await fetch(srv.url + '/api/portfolio')).json();
+  assert.equal(copied.transactions.length, mainTxTotal * 2, '交易應被複製一份');
+  assert.deepEqual(copied.plans[1].allocations, copied.plans[0].allocations);
+  const sourceIds = new Set(after.transactions.map((t) => t.id));
+  const copies = copied.transactions.filter((t) => !sourceIds.has(t.id));
+  assert.equal(copies.length, mainTxTotal);
+  const newPlanId = copied.plans[1].id;
+  for (const c of copies) assert.deepEqual(c.plans, [newPlanId], '副本只掛新計畫');
+  // 來源計畫的交易完全沒被動到
+  for (const src of after.transactions) {
+    assert.deepEqual(copied.transactions.find((t) => t.id === src.id).plans, src.plans);
+  }
+
+  assert.deepEqual(jsErrors, [], 'JS errors: ' + jsErrors.join('; '));
+});

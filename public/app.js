@@ -1,7 +1,5 @@
 'use strict';
 
-const DEFAULT_BUDGET = 5_000_000;
-
 const DEFAULT_STOCKS = [
   { id: '2330', name: '台積電', symbol: '2330.TW', market: '台股', currency: 'TWD', category: '晶圓代工', percent: 25 },
   { id: 'TSM', name: 'TSM ADR', symbol: 'TSM', market: '美股', currency: 'USD', category: '晶圓代工', percent: 25 },
@@ -55,9 +53,11 @@ const BASIS = {
 
 // 共用計算（平均成本重放等）住在 portfolio-math.js，前後端共用同一份實作
 const fxSymbolOf = PortfolioMath.fxSymbolOf;
+const DEFAULT_BUDGET = PortfolioMath.DEFAULT_BUDGET;
 
 const state = {
-  budget: DEFAULT_BUDGET,
+  plans: [], // 具名投資規劃 { id, name, budget, allocations }；載入時由遷移保證至少有一個
+  activePlanId: null, // 目前計畫（分頁）
   stocks: DEFAULT_STOCKS,
   transactions: [],
   snapshots: [],
@@ -74,6 +74,17 @@ const state = {
 
 // 各使用者在瀏覽器端的備份各自存一份；訪客（未登入）模式的正式儲存位置就是這裡
 const backupKey = () => 'portfolio-backup:' + (state.user?.sub || 'local');
+const newTxId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+// 目前計畫記在瀏覽器，依使用者分開
+const activePlanKey = () => 'active-plan:' + (state.user?.sub || 'local');
+
+// 目前計畫，以及「只屬於它」的交易與總預算——畫面上所有計算都經過這三個入口
+const activePlan = () => state.plans.find((p) => p.id === state.activePlanId) || state.plans[0] || null;
+const planBudget = () => activePlan()?.budget || DEFAULT_BUDGET;
+const planTxs = () => PortfolioMath.transactionsInPlan(state.transactions, activePlan()?.id);
+// 目標配置比例跟著計畫走：標的清單全帳號共用，percent 由目前計畫的 allocations 提供
+const planPercentOf = (stockId) => Number(activePlan()?.allocations?.[stockId]) || 0;
+const planStocks = () => state.stocks.map((s) => ({ ...s, percent: planPercentOf(s.id) }));
 
 // 啟用登入但尚未登入 → 訪客模式：資料只存瀏覽器 localStorage，不打伺服器
 const isGuest = () => state.authEnabled && !state.user;
@@ -111,8 +122,15 @@ const quoteUrlOf = (symbol) => {
 };
 
 // ---------- 資料存取 ----------
-function applyDoc(data) {
+function applyDoc(raw) {
+  // 舊格式在載入時就地遷移（記憶體），下一次存檔才落地到伺服器
+  const data = PortfolioMath.migratePortfolio({ ...raw, stocks: Array.isArray(raw.stocks) && raw.stocks.length ? raw.stocks : state.stocks });
   if (data.rev !== undefined) state.rev = Number(data.rev) || 0;
+  state.plans = data.plans;
+  // 帳號資料還沒有標的清單（新帳號、或只用 API 寫入交易的資料）→ 標的與目標配置一起套用預設
+  if (!(Array.isArray(raw.stocks) && raw.stocks.length) && state.plans[0] && !Object.keys(state.plans[0].allocations || {}).length) {
+    state.plans[0].allocations = Object.fromEntries(DEFAULT_STOCKS.filter((s) => s.percent > 0).map((s) => [s.id, s.percent]));
+  }
   state.transactions = Array.isArray(data.transactions) ? data.transactions : [];
   state.snapshots = Array.isArray(data.snapshots) ? data.snapshots : [];
   state.ignoredEvents = Array.isArray(data.ignoredEvents) ? data.ignoredEvents : [];
@@ -123,7 +141,14 @@ function applyDoc(data) {
       category: s.category || DEFAULT_STOCKS.find((d) => d.id === s.id)?.category || '未分類',
     }));
   }
-  if (Number(data.budget) > 0) state.budget = Number(data.budget);
+  selectPlan(localStorage.getItem(activePlanKey()));
+}
+
+// 切到指定計畫；找不到（例如已被刪除）就退回第一個計畫
+function selectPlan(planId) {
+  const found = state.plans.find((p) => p.id === planId);
+  state.activePlanId = (found || state.plans[0])?.id || null;
+  if (state.activePlanId) localStorage.setItem(activePlanKey(), state.activePlanId);
 }
 
 function tryApplyBackup(key) {
@@ -139,10 +164,19 @@ function tryApplyBackup(key) {
   return false;
 }
 
+// 完全沒有資料可套用時（訪客且無備份）applyDoc 不會跑到，這裡補上預設計畫
+function ensurePlans() {
+  if (!state.plans.length) {
+    state.plans = PortfolioMath.migratePortfolio({ stocks: state.stocks }).plans;
+    selectPlan(localStorage.getItem(activePlanKey()));
+  }
+}
+
 async function loadPortfolio() {
   if (isGuest()) {
     // 訪客模式：直接從瀏覽器讀（也相容啟用登入前的舊 key）
     tryApplyBackup(backupKey()) || tryApplyBackup('portfolio-backup');
+    ensurePlans();
     return;
   }
   try {
@@ -161,18 +195,19 @@ async function loadPortfolio() {
       showNotice('已將瀏覽器中的紀錄同步到你的帳號。');
     }
   }
+  ensurePlans();
 }
 
 async function savePortfolio({ includeSnapshots = false } = {}) {
   const backup = {
-    budget: state.budget,
+    plans: state.plans,
     stocks: state.stocks,
     transactions: state.transactions,
     snapshots: state.snapshots,
     ignoredEvents: state.ignoredEvents,
   };
   const payload = {
-    budget: state.budget,
+    plans: state.plans,
     stocks: state.stocks,
     transactions: state.transactions,
     ignoredEvents: state.ignoredEvents,
@@ -300,13 +335,18 @@ function renderAlerts() {
       div.innerHTML = `📢 <b>${esc(a.stock.name)}</b> 於 ${esc(a.date)} 股票分割 1→${fmtNum(a.ratio, 4)}，你的交易紀錄尚未調整。
         <span class="alert-actions"><button class="alert-apply">套用分割</button><button class="alert-ignore">忽略</button></span>`;
       div.querySelector('.alert-apply').addEventListener('click', async () => {
-        state.transactions.push({
-          id: 'split-' + a.stock.id + '-' + a.date,
-          stockId: a.stock.id,
-          date: a.date,
-          kind: 'split',
-          ratio: a.ratio,
-        });
+        // 分割是客觀事實：一次補齊每個在分割日持有這檔標的的計畫，不必逐個分頁重按
+        const holders = PortfolioMath.plansHoldingOn(state.plans, state.transactions, a.stock.id, a.date);
+        for (const planId of holders) {
+          state.transactions.push({
+            id: 'split-' + a.stock.id + '-' + a.date + '-' + planId,
+            stockId: a.stock.id,
+            date: a.date,
+            kind: 'split',
+            ratio: a.ratio,
+            plans: [planId],
+          });
+        }
         await savePortfolio();
         render();
         renderAlerts();
@@ -324,6 +364,7 @@ function renderAlerts() {
         $('tx-date').value = a.date;
         $('tx-amount').value = String(Math.round(a.estimatedAmount * 100) / 100);
         $('tx-twd').value = '';
+        renderTxPlans(PortfolioMath.plansHoldingOn(state.plans, state.transactions, a.stock.id, a.date));
         $('tx-form').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       });
     }
@@ -352,7 +393,18 @@ function fxRate(currency) {
 
 // 平均成本重放的實作在 portfolio-math.js；這裡只把 state 轉接成純函式參數
 function computeStock(stock) {
-  return PortfolioMath.computeStock(stock, state.transactions, state.quotes, state.budget);
+  return computeStockFor(activePlan(), stock);
+}
+
+// 指定計畫視角下的重放（快照要對每個計畫各算一次）
+function computeStockFor(plan, stock) {
+  const withPercent = { ...stock, percent: Number(plan?.allocations?.[stock.id]) || 0 };
+  return PortfolioMath.computeStock(
+    withPercent,
+    PortfolioMath.transactionsInPlan(state.transactions, plan?.id),
+    state.quotes,
+    plan?.budget || DEFAULT_BUDGET
+  );
 }
 
 function sortedByTargetPercent(items, stockOf = (x) => x) {
@@ -375,20 +427,232 @@ function todayTaipei() {
   }).format(new Date());
 }
 
+// ---------- 計畫分頁 ----------
+
+function renderPlanTabs() {
+  syncTxPlansOptions();
+  const list = $('plan-tab-list');
+  list.innerHTML = '';
+  for (const p of state.plans) {
+    const btn = document.createElement('button');
+    btn.className = 'plan-tab' + (p.id === activePlan()?.id ? ' active' : '');
+    btn.textContent = p.name;
+    btn.dataset.planId = p.id;
+    btn.setAttribute('aria-current', p.id === activePlan()?.id ? 'page' : 'false');
+    list.appendChild(btn);
+  }
+}
+
+// 切換分頁：換一組篩過的交易重跑同一套計算，歷史區間也要跟著重抓
+async function switchPlan(planId) {
+  if (planId === activePlan()?.id) return;
+  selectPlan(planId);
+  closePlanCard();
+  if (!editingTxId) renderTxPlans(null);
+  render();
+  await loadHistory();
+}
+
+let deletingPlanId = null; // 正在等待打字確認的計畫
+
+// 管理計畫：每個計畫一列，可改名、改總預算、調順序、刪除
+function renderPlanRows() {
+  const wrap = $('plan-rows');
+  wrap.innerHTML = '';
+  state.plans.forEach((p, i) => {
+    const row = document.createElement('div');
+    row.className = 'plan-row';
+    row.dataset.planId = p.id;
+    row.innerHTML = `
+      <input class="plan-row-name" type="text" maxlength="20" value="${esc(p.name)}" aria-label="計畫名稱" />
+      <input class="plan-row-budget" type="text" inputmode="decimal" value="${Number(p.budget) || 0}" aria-label="總預算" />
+      <button type="button" class="btn btn-ghost plan-move" data-dir="-1" ${i === 0 ? 'disabled' : ''} aria-label="上移">↑</button>
+      <button type="button" class="btn btn-ghost plan-move" data-dir="1" ${i === state.plans.length - 1 ? 'disabled' : ''} aria-label="下移">↓</button>
+      <button type="button" class="btn btn-ghost plan-delete" ${state.plans.length < 2 ? 'disabled title="最後一個計畫不能刪除"' : ''}>刪除</button>`;
+    wrap.appendChild(row);
+
+    if (deletingPlanId === p.id) {
+      const orphans = PortfolioMath.transactionsOnlyInPlan(state.transactions, p.id).length;
+      const confirmRow = document.createElement('div');
+      confirmRow.className = 'plan-confirm';
+      confirmRow.innerHTML = `
+        <p>刪除「${esc(p.name)}」將連帶刪除 <strong>${orphans}</strong> 筆只屬於它的交易，無法復原。同時掛在其他計畫的交易會保留。</p>
+        <div class="plan-confirm-row">
+          <input type="text" id="plan-confirm-input" placeholder="輸入「${esc(p.name)}」確認" aria-label="輸入計畫名稱確認" />
+          <button type="button" class="btn btn-primary" id="plan-confirm-btn" disabled>確認刪除</button>
+          <button type="button" class="btn" id="plan-confirm-cancel">取消</button>
+        </div>`;
+      wrap.appendChild(confirmRow);
+    }
+  });
+}
+
+// 複製來源下拉：不選＝建立空白計畫
+function renderPlanCopyFrom() {
+  const sel = $('plan-copy-from');
+  sel.innerHTML = '<option value="">（不複製，建立空白計畫）</option>';
+  for (const p of state.plans) {
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    opt.textContent = p.name;
+    sel.appendChild(opt);
+  }
+  updatePlanCopyUI();
+}
+
+function updatePlanCopyUI() {
+  const from = $('plan-copy-from').value;
+  $('plan-copy-options').hidden = !from;
+  $('plan-copy-hint').hidden = !from || !$('plan-copy-txs').checked;
+}
+
+function openPlanCard() {
+  deletingPlanId = null;
+  $('plan-name').value = '';
+  $('plan-budget').value = '';
+  $('plan-copy-txs').checked = false;
+  $('plan-copy-alloc').checked = true;
+  renderPlanCopyFrom();
+  renderPlanRows();
+  $('plan-card').hidden = false;
+  $('plan-name').focus();
+}
+
+function closePlanCard() {
+  deletingPlanId = null;
+  $('plan-card').hidden = true;
+}
+
+async function deletePlan(planId) {
+  const doc = PortfolioMath.removePlan(
+    { plans: state.plans, transactions: state.transactions, snapshots: state.snapshots },
+    planId
+  );
+  state.plans = doc.plans;
+  state.transactions = doc.transactions;
+  state.snapshots = doc.snapshots;
+  selectPlan(state.activePlanId); // 刪掉的是目前計畫 → 退回第一個
+  closePlanCard();
+  await savePortfolio();
+  render();
+  await loadHistory();
+}
+
+// 計畫識別碼不隨名稱改變，且不重複使用——刪掉的計畫留下的舊 id
+//（其他裝置的 localStorage、舊備份檔）不會意外對到新建的計畫
+function newPlanId() {
+  return 'plan-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+function initPlans() {
+  $('plan-tab-list').addEventListener('click', (e) => {
+    const btn = e.target.closest('.plan-tab');
+    if (btn) switchPlan(btn.dataset.planId);
+  });
+  $('plan-manage-btn').addEventListener('click', () => {
+    if ($('plan-card').hidden) openPlanCard();
+    else closePlanCard();
+  });
+  $('plan-cancel').addEventListener('click', closePlanCard);
+  $('tx-plans').addEventListener('change', updateTxPlansHint);
+  $('plan-copy-from').addEventListener('change', updatePlanCopyUI);
+  $('plan-copy-txs').addEventListener('change', updatePlanCopyUI);
+
+  // 管理計畫的列：改名、改總預算、調順序、刪除
+  $('plan-rows').addEventListener('change', async (e) => {
+    const row = e.target.closest('.plan-row');
+    if (!row) return;
+    const plan = state.plans.find((p) => p.id === row.dataset.planId);
+    if (!plan) return;
+    if (e.target.classList.contains('plan-row-name')) {
+      const name = e.target.value.trim();
+      if (!name) return (e.target.value = plan.name);
+      plan.name = name;
+    } else if (e.target.classList.contains('plan-row-budget')) {
+      const budget = parseDecimalInput(e.target.value);
+      if (!(budget > 0)) return (e.target.value = plan.budget);
+      plan.budget = budget;
+    } else return;
+    await savePortfolio();
+    render();
+  });
+
+  $('plan-rows').addEventListener('input', (e) => {
+    if (e.target.id !== 'plan-confirm-input') return;
+    const plan = state.plans.find((p) => p.id === deletingPlanId);
+    $('plan-confirm-btn').disabled = !plan || e.target.value.trim() !== plan.name;
+  });
+
+  $('plan-rows').addEventListener('click', async (e) => {
+    if (e.target.id === 'plan-confirm-cancel') {
+      deletingPlanId = null;
+      return renderPlanRows();
+    }
+    if (e.target.id === 'plan-confirm-btn') return deletePlan(deletingPlanId);
+
+    const row = e.target.closest('.plan-row');
+    if (!row) return;
+    const idx = state.plans.findIndex((p) => p.id === row.dataset.planId);
+    if (idx < 0) return;
+    if (e.target.classList.contains('plan-move')) {
+      const to = idx + Number(e.target.dataset.dir);
+      if (to < 0 || to >= state.plans.length) return;
+      [state.plans[idx], state.plans[to]] = [state.plans[to], state.plans[idx]];
+      renderPlanRows();
+      await savePortfolio();
+      render();
+    } else if (e.target.classList.contains('plan-delete')) {
+      deletingPlanId = state.plans[idx].id;
+      renderPlanRows();
+      $('plan-confirm-input')?.focus();
+    }
+  });
+  $('plan-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = $('plan-name').value.trim();
+    const source = state.plans.find((p) => p.id === $('plan-copy-from').value);
+    const copyAlloc = source && $('plan-copy-alloc').checked;
+    const budgetRaw = $('plan-budget').value.trim();
+    // 複製目標金額時，總預算欄留空就沿用來源的
+    const budget = budgetRaw === '' && copyAlloc ? source.budget : parseDecimalInput(budgetRaw);
+    if (!name) return alert('請填計畫名稱');
+    if (!(budget > 0)) return alert('總預算必須是正數');
+    const plan = {
+      id: newPlanId(),
+      name,
+      budget,
+      allocations: copyAlloc ? { ...source.allocations } : {},
+    };
+    state.plans.push(plan);
+    if (source && $('plan-copy-txs').checked) {
+      // 獨立副本：之後在新分頁改動或刪除都不影響來源計畫
+      state.transactions.push(
+        ...PortfolioMath.copyTransactionsToPlan(state.transactions, source.id, plan.id, newTxId)
+      );
+    }
+    selectPlan(plan.id);
+    closePlanCard();
+    await savePortfolio();
+    render();
+    await loadHistory();
+  });
+}
+
 // ---------- 畫面 ----------
 function render() {
-  const rows = sortedByTargetPercent(state.stocks.map(computeStock), (r) => r.stock);
+  renderPlanTabs();
+  const rows = sortedByTargetPercent(planStocks().map(computeStock), (r) => r.stock);
 
   const totalInvested = rows.reduce((s, r) => s + (r.invested ?? 0), 0);
   const anyValueMissing = rows.some((r) => r.valueTWD == null);
   const totalValue = anyValueMissing ? null : rows.reduce((s, r) => s + r.valueTWD, 0);
   const totalPnl = totalValue != null ? totalValue - totalInvested : null;
-  const overallProgress = totalInvested / state.budget;
+  const overallProgress = totalInvested / planBudget();
 
-  $('subtitle').textContent = `總預算 ${fmtTWD(state.budget)} ・ ${state.stocks.length} 檔標的目標配置`;
+  $('subtitle').textContent = `總預算 ${fmtTWD(planBudget())} ・ ${state.stocks.length} 檔標的目標配置`;
 
   $('kpi-invested').textContent = fmtTWD(totalInvested);
-  $('kpi-invested-sub').textContent = '剩餘可投入 ' + fmtTWD(Math.max(state.budget - totalInvested, 0));
+  $('kpi-invested-sub').textContent = '剩餘可投入 ' + fmtTWD(Math.max(planBudget() - totalInvested, 0));
   $('kpi-value').textContent = fmtTWD(totalValue);
   $('kpi-value-sub').textContent = state.fetchedAt
     ? '報價時間 ' + new Date(state.fetchedAt).toLocaleString('zh-TW', { hour12: false })
@@ -408,10 +672,10 @@ function render() {
   $('kpi-realized-sub').textContent = totalDividends !== 0 ? '含股利 ' + fmtTWD(totalDividends) : '賣出損益＋股利';
 
   $('kpi-progress').textContent = fmtPct(overallProgress);
-  $('kpi-progress-sub').textContent = '目標 ' + fmtTWD(state.budget);
+  $('kpi-progress-sub').textContent = '目標 ' + fmtTWD(planBudget());
 
   $('overall-progress-label').textContent =
-    fmtTWD(totalInvested) + ' / ' + fmtTWD(state.budget) + '（' + fmtPct(overallProgress) + '）';
+    fmtTWD(totalInvested) + ' / ' + fmtTWD(planBudget()) + '（' + fmtPct(overallProgress) + '）';
   const bar = $('overall-progress-bar');
   bar.style.width = Math.min(overallProgress * 100, 100) + '%';
   bar.classList.toggle('over', overallProgress > 1);
@@ -437,7 +701,7 @@ function render() {
     : '尚未取得報價';
 }
 
-function snapshotFromRows(rows, source = 'manual') {
+function snapshotFromRows(rows, source = 'manual', planId = activePlan()?.id ?? null) {
   const totalInvested = rows.reduce((s, r) => s + (r.invested ?? 0), 0);
   const anyValueMissing = rows.some((r) => r.valueTWD == null);
   const totalValue = anyValueMissing ? null : rows.reduce((s, r) => s + r.valueTWD, 0);
@@ -445,6 +709,7 @@ function snapshotFromRows(rows, source = 'manual') {
   const pnlPct = pnl != null && totalInvested > 0 ? pnl / totalInvested : null;
   return {
     date: todayTaipei(),
+    planId,
     at: Date.now(),
     source,
     totalInvested,
@@ -468,9 +733,7 @@ function snapshotFromRows(rows, source = 'manual') {
 }
 
 function upsertLocalSnapshot(snapshot) {
-  state.snapshots = [...state.snapshots.filter((s) => s.date !== snapshot.date), snapshot].sort((a, b) =>
-    String(a.date).localeCompare(String(b.date))
-  );
+  state.snapshots = PortfolioMath.upsertSnapshots(state.snapshots, [snapshot]);
 }
 
 // ---------- 歷史市值回填 ----------
@@ -480,12 +743,13 @@ let benchmarkOn = localStorage.getItem('benchmark-on') === '1';
 const HIST_DISPLAY_DAYS = { '1mo': 31, '3mo': 93, '6mo': 186, '1y': 372, all: Infinity };
 
 async function loadHistory() {
-  const held = state.stocks.filter((s) => state.transactions.some((t) => t.stockId === s.id));
+  const txs = planTxs();
+  const held = state.stocks.filter((s) => txs.some((t) => t.stockId === s.id));
   if (!held.length) {
     state.history = null;
     return;
   }
-  const firstTx = state.transactions.reduce((min, t) => (t.date < min ? t.date : min), '9999');
+  const firstTx = txs.reduce((min, t) => (t.date < min ? t.date : min), '9999');
   const days = (Date.now() - new Date(firstTx).getTime()) / 86400_000;
   const range =
     days <= 25 ? '1mo' : days <= 85 ? '3mo' : days <= 175 ? '6mo' : days <= 360 ? '1y' : days <= 720 ? '2y' : days <= 1800 ? '5y' : 'max';
@@ -509,9 +773,9 @@ function computeDailySeries() {
   return PortfolioMath.computeDailySeries({
     history: state.history,
     stocks: state.stocks,
-    transactions: state.transactions,
+    transactions: planTxs(),
     quotes: state.quotes,
-    budget: state.budget,
+    budget: planBudget(),
     benchSymbol: BENCH_SYMBOL,
     today: todayTaipei(),
   });
@@ -522,7 +786,7 @@ function computeXirr(rows) {
   return PortfolioMath.computeXirr({
     rows,
     stocks: state.stocks,
-    transactions: state.transactions,
+    transactions: planTxs(),
     quotes: state.quotes,
     today: todayTaipei(),
   });
@@ -545,7 +809,7 @@ function getChartSeries() {
     };
   }
   const snaps = state.snapshots
-    .filter((s) => s.totalValue != null)
+    .filter((s) => s.totalValue != null && (!s.planId || s.planId === activePlan()?.id))
     .sort((a, b) => String(a.date).localeCompare(String(b.date)));
   if (!snaps.length) return null;
   return {
@@ -845,11 +1109,11 @@ function renderHoldings(rows, totalInvested, totalValue, totalPnl) {
     body.appendChild(tr);
   }
 
-  const totalPercent = state.stocks.reduce((s, x) => s + (Number(x.percent) || 0), 0);
+  const totalPercent = state.stocks.reduce((s, x) => s + planPercentOf(x.id), 0);
   $('holdings-foot').innerHTML = `
     <tr>
       <td>合計</td>
-      <td class="num">${fmtNum(totalPercent, 1)}%<span class="cell-sub">${fmtTWD(state.budget)}</span></td>
+      <td class="num">${fmtNum(totalPercent, 1)}%<span class="cell-sub">${fmtTWD(planBudget())}</span></td>
       <td class="num"></td>
       <td class="num"></td>
       <td class="num">${fmtTWD(totalInvested)}</td>
@@ -959,7 +1223,7 @@ function renderDonut(rows) {
     angle = a1;
   }
 
-  const centerNum = chartBasis === 'target' ? fmtTWD(state.budget) : fmtTWD(total);
+  const centerNum = chartBasis === 'target' ? fmtTWD(planBudget()) : fmtTWD(total);
   donutEl.innerHTML = `
     <svg viewBox="0 0 320 320" class="donut-svg" role="img" aria-label="資產類別配置圓餅圖">
       <defs>
@@ -989,7 +1253,7 @@ function renderDonutLegend(ordered, colorMap, catOrder, basis, total) {
     const members = ordered.filter((r) => (r.stock.category || '未分類') === cat);
     const catValue = members.reduce((s, r) => s + basis.valueOf(r), 0);
     const catPct = total > 0 ? catValue / total : 0;
-    const legendValue = chartBasis === 'target' ? fmtTWD((state.budget * catValue) / 100) : basis.fmtVal(catValue);
+    const legendValue = chartBasis === 'target' ? fmtTWD((planBudget() * catValue) / 100) : basis.fmtVal(catValue);
     const memberHtml = members
       .map((r) => {
         const v = basis.valueOf(r);
@@ -1054,7 +1318,7 @@ function bindDonutTooltip() {
 function renderTransactions() {
   const body = $('tx-body');
   body.innerHTML = '';
-  const sorted = [...state.transactions].sort((a, b) => (a.date < b.date ? 1 : -1));
+  const sorted = [...planTxs()].sort((a, b) => (a.date < b.date ? 1 : -1));
   for (const t of sorted) {
     const stock = state.stocks.find((s) => s.id === t.stockId);
     const isDiv = t.kind === 'dividend';
@@ -1124,7 +1388,7 @@ function toggleMonthlyDetail(row, month) {
     return;
   }
   document.querySelectorAll('.monthly-detail').forEach((el) => el.remove());
-  const txs = state.transactions
+  const txs = planTxs()
     .filter((t) => String(t.date).slice(0, 7) === month)
     .sort((a, b) => String(a.date).localeCompare(String(b.date)));
   const tr = document.createElement('tr');
@@ -1158,8 +1422,45 @@ function updateTxKindUI() {
   $('tx-twd-caption').textContent = isDiv ? '台幣入帳金額（選填）' : '台幣總成本（選填）';
 }
 
+// 交易表單的計畫多選：預設勾選目前計畫，編輯既有交易時帶出它原本的歸屬
+function renderTxPlans(selected) {
+  const wrap = $('tx-plans');
+  txPlansSignature = state.plans.map((p) => p.id + ':' + p.name).join(',') + '|' + (activePlan()?.id || '');
+  const checked = new Set(selected && selected.length ? selected : [activePlan()?.id].filter(Boolean));
+  wrap.innerHTML = '';
+  for (const p of state.plans) {
+    const label = document.createElement('label');
+    label.className = 'tx-plan-option';
+    label.innerHTML = `<input type="checkbox" value="${esc(p.id)}"${checked.has(p.id) ? ' checked' : ''}> ${esc(p.name)}`;
+    wrap.appendChild(label);
+  }
+  // 只有一個計畫時勾選框沒有意義，整欄收起來
+  $('tx-plans-field').hidden = state.plans.length < 2;
+  updateTxPlansHint();
+}
+
+function selectedTxPlans() {
+  return [...document.querySelectorAll('#tx-plans input:checked')].map((el) => el.value);
+}
+
+// 計畫清單或目前計畫變了才重建勾選框，並保留使用者已勾的選擇——
+// 否則每次 render（更新報價、切圖表範圍…）都會把勾好的計畫沖掉。
+let txPlansSignature = '';
+function syncTxPlansOptions() {
+  const signature = state.plans.map((p) => p.id + ':' + p.name).join(',') + '|' + (activePlan()?.id || '');
+  if (signature === txPlansSignature) return;
+  txPlansSignature = signature;
+  const kept = selectedTxPlans().filter((id) => state.plans.some((p) => p.id === id));
+  renderTxPlans(kept);
+}
+
+function updateTxPlansHint() {
+  $('tx-plans-hint').hidden = selectedTxPlans().length < 2;
+}
+
 function resetTxForm() {
   editingTxId = null;
+  renderTxPlans(null);
   $('tx-shares').value = '';
   $('tx-price').value = '';
   $('tx-amount').value = '';
@@ -1181,6 +1482,7 @@ function startEditTx(id) {
   $('tx-price').value = t.kind === 'dividend' ? '' : t.price;
   $('tx-amount').value = t.kind === 'dividend' ? (t.amount ?? '') : '';
   $('tx-twd').value = t.twdCost ?? '';
+  renderTxPlans(t.plans);
   $('tx-submit').textContent = '更新交易';
   $('tx-cancel-edit').hidden = false;
   $('tx-form-title').textContent = '編輯交易';
@@ -1284,7 +1586,7 @@ async function importCsv(text) {
   if (!confirm(msg)) return;
 
   for (const rec of imported) {
-    state.transactions.push({ ...rec, id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6) });
+    state.transactions.push({ ...rec, plans: [activePlan().id], id: newTxId() });
   }
   await savePortfolio();
   render();
@@ -1300,7 +1602,7 @@ function renderRebalance(rows, totalValue) {
   });
 
   const useValue = rebalanceBase === 'value' && totalValue != null && totalValue > 0;
-  const anchor = useValue ? totalValue : state.budget;
+  const anchor = useValue ? totalValue : planBudget();
   $('rebalance-note').textContent =
     rebalanceBase === 'value' && !useValue ? '（目前市值不可用，暫以總預算計算）' : '';
 
@@ -1502,11 +1804,13 @@ function rebalanceEditorPercents() {
 }
 
 function openEditor() {
-  $('edit-budget').value = state.budget;
+  // 標的基本資料全帳號共用，比例只改目前計畫的目標配置 — 欄位標題標明是哪個計畫
+  $('editor-percent-head').textContent = `目標％（${activePlan()?.name || ''}）`;
+  $('edit-budget').value = planBudget();
   refreshCategoryDatalist();
   const body = $('editor-body');
   body.innerHTML = '';
-  for (const s of sortedByTargetPercent(state.stocks)) body.appendChild(editorRow(s));
+  for (const s of sortedByTargetPercent(planStocks())) body.appendChild(editorRow(s));
   updateEditorTotal();
   $('editor-card').hidden = false;
   $('edit-stocks-btn').hidden = true;
@@ -1561,8 +1865,11 @@ function saveEditor() {
     return;
   }
 
-  state.budget = budget;
-  state.stocks = sortedByTargetPercent(stocks);
+  const plan = activePlan();
+  plan.budget = budget;
+  plan.allocations = {};
+  for (const s of stocks) if (s.percent > 0) plan.allocations[s.id] = s.percent;
+  state.stocks = sortedByTargetPercent(stocks).map(({ percent, ...rest }) => rest);
   savePortfolio();
   rebuildStockSelect();
   closeEditor();
@@ -1641,11 +1948,16 @@ function initForm() {
       record = { ...base, shares, price, twdCost };
     }
 
+    const plans = state.plans.length < 2 ? [activePlan().id] : selectedTxPlans();
+    if (!plans.length) {
+      alert('請至少勾選一個計畫');
+      return;
+    }
     if (editingTxId) {
       const idx = state.transactions.findIndex((t) => t.id === editingTxId);
-      if (idx >= 0) state.transactions[idx] = { ...record, id: editingTxId };
+      if (idx >= 0) state.transactions[idx] = { ...state.transactions[idx], ...record, plans, id: editingTxId };
     } else {
-      state.transactions.push({ ...record, id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6) });
+      state.transactions.push({ ...record, plans, id: newTxId() });
     }
     await savePortfolio();
     resetTxForm();
@@ -1703,18 +2015,19 @@ function initForm() {
     try {
       if (isGuest()) {
         await loadQuotes();
-        const rows = sortedByTargetPercent(state.stocks.map(computeStock), (r) => r.stock);
-        const snapshot = snapshotFromRows(rows, 'manual');
-        upsertLocalSnapshot(snapshot);
+        for (const plan of state.plans) {
+          const rows = state.stocks.map((stock) => computeStockFor(plan, stock));
+          upsertLocalSnapshot(snapshotFromRows(rows, 'manual', plan.id));
+        }
         await savePortfolio({ includeSnapshots: true });
       } else {
         const res = await fetch('/api/snapshots/today', { method: 'POST' });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || '記錄失敗');
-        upsertLocalSnapshot(data.snapshot);
+        for (const snap of data.snapshots || []) upsertLocalSnapshot(snap);
         if (data.rev !== undefined) state.rev = Number(data.rev) || state.rev; // 伺服器已寫入，同步版本號
         localStorage.setItem(backupKey(), JSON.stringify({
-          budget: state.budget,
+          plans: state.plans,
           stocks: state.stocks,
           transactions: state.transactions,
           snapshots: state.snapshots,
@@ -1771,7 +2084,7 @@ function initForm() {
   }
 
   $('export-btn').addEventListener('click', () => {
-    const doc = { budget: state.budget, stocks: state.stocks, transactions: state.transactions, snapshots: state.snapshots };
+    const doc = { plans: state.plans, stocks: state.stocks, transactions: state.transactions, snapshots: state.snapshots };
     const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -1839,7 +2152,8 @@ async function onGoogleCredential(response) {
     state.user = data.user;
     $('login-view').hidden = true;
     // 換人了：先回到預設狀態再載入帳號資料，避免訪客資料和帳號資料混在一起
-    state.budget = DEFAULT_BUDGET;
+    state.plans = [];
+    state.activePlanId = null;
     state.stocks = DEFAULT_STOCKS;
     state.transactions = [];
     state.snapshots = [];
@@ -1904,6 +2218,7 @@ function watchOnlineStatus() {
   watchOnlineStatus();
   initForm();
   initEditor();
+  initPlans();
   $('logout-btn').addEventListener('click', async () => {
     await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
     location.reload();

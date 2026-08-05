@@ -100,6 +100,76 @@
     };
   }
 
+  const DEFAULT_BUDGET = 5_000_000;
+
+  // 舊格式（單一計畫、目標比例掛在標的上）→ 新格式（plans 陣列、交易與快照標明歸屬）。
+  // 純函式且幂等：不就地修改輸入，已遷移的資料再跑一次結果相同。
+  function migratePortfolio(doc) {
+    const stocks = Array.isArray(doc.stocks) ? doc.stocks : [];
+    let plans = Array.isArray(doc.plans) ? doc.plans : [];
+    if (!plans.length) {
+      const allocations = {};
+      for (const s of stocks) if (Number(s.percent) > 0) allocations[s.id] = Number(s.percent);
+      plans = [
+        {
+          id: 'plan-1',
+          name: '主要計畫',
+          budget: Number(doc.budget) > 0 ? Number(doc.budget) : DEFAULT_BUDGET,
+          allocations,
+        },
+      ];
+    }
+    const primary = plans[0].id;
+    const transactions = (Array.isArray(doc.transactions) ? doc.transactions : []).map((t) =>
+      Array.isArray(t.plans) && t.plans.length ? t : { ...t, plans: [primary] }
+    );
+    const snapshots = (Array.isArray(doc.snapshots) ? doc.snapshots : []).map((s) =>
+      s.planId ? s : { ...s, planId: primary }
+    );
+    return { ...doc, plans, transactions, snapshots };
+  }
+
+  // 多計畫的唯一篩選點：所有計算函式都吃「已篩選的交易」，本身不認得計畫。
+  // 沒有標籤的交易在每個計畫都看得到——遷移會補上標籤，萬一有漏網之魚，
+  // 寧可到處都看得到讓使用者發現，也不要整筆從畫面上消失。
+  function transactionsInPlan(transactions, planId) {
+    return (Array.isArray(transactions) ? transactions : []).filter(
+      (t) => !Array.isArray(t.plans) || !t.plans.length || t.plans.includes(planId)
+    );
+  }
+
+  // 只屬於這個計畫的交易——刪除計畫時會跟著消失的那些
+  const onlyInPlan = (t, planId) => Array.isArray(t.plans) && t.plans.length === 1 && t.plans[0] === planId;
+
+  function transactionsOnlyInPlan(transactions, planId) {
+    return (Array.isArray(transactions) ? transactions : []).filter((t) => onlyInPlan(t, planId));
+  }
+
+  // 同一天同一個計畫只留一筆快照；前後端共用同一套 upsert 規則
+  function upsertSnapshots(snapshots, incoming) {
+    const replaced = new Set(incoming.map((s) => s.date + '|' + s.planId));
+    const kept = (Array.isArray(snapshots) ? snapshots : []).filter((s) => !replaced.has(s.date + '|' + s.planId));
+    return [...kept, ...incoming].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  }
+
+  // 從既有計畫複製交易：產生獨立副本（新的交易 id、只掛新計畫），來源不受影響。
+  // makeId 由呼叫端提供，讓這個函式維持純函式。
+  function copyTransactionsToPlan(transactions, fromPlanId, toPlanId, makeId) {
+    return transactionsInPlan(transactions, fromPlanId).map((t) => ({ ...t, id: makeId(), plans: [toPlanId] }));
+  }
+
+  // 刪除計畫：孤兒交易與該計畫的快照一併刪除，同時掛在其他計畫的交易只移除這個標籤
+  function removePlan(doc, planId) {
+    return {
+      ...doc,
+      plans: (doc.plans || []).filter((p) => p.id !== planId),
+      transactions: (doc.transactions || [])
+        .filter((t) => !onlyInPlan(t, planId))
+        .map((t) => (Array.isArray(t.plans) && t.plans.includes(planId) ? { ...t, plans: t.plans.filter((p) => p !== planId) } : t)),
+      snapshots: (doc.snapshots || []).filter((s) => s.planId !== planId),
+    };
+  }
+
   function msToDateStr(ms) {
     return new Date(ms).toISOString().slice(0, 10);
   }
@@ -133,6 +203,19 @@
       s += Number(t.shares) || 0;
     }
     return s;
+  }
+
+  // 某日仍持有該標的的計畫——分割要對每個這樣的計畫各補一筆調整紀錄，
+  // 未記帳配息的表單也預設勾選這些計畫
+  function plansHoldingOn(plans, transactions, stockId, date) {
+    return (Array.isArray(plans) ? plans : [])
+      .filter((p) => {
+        const mine = transactionsInPlan(transactions, p.id)
+          .filter((t) => t.stockId === stockId)
+          .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+        return rawSharesOn(mine, date) > 0;
+      })
+      .map((p) => p.id);
   }
 
   // 找出「分割日當天仍有股數、且尚未套用（無 7 天內同比例的 split 紀錄）也未忽略」的分割事件
@@ -464,6 +547,14 @@
     fxSymbolOf,
     fxRateOf,
     eventKey,
+    DEFAULT_BUDGET,
+    migratePortfolio,
+    transactionsInPlan,
+    transactionsOnlyInPlan,
+    upsertSnapshots,
+    copyTransactionsToPlan,
+    plansHoldingOn,
+    removePlan,
     computeStock,
     computeDailySeries,
     computeMonthlyReport,
