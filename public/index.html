@@ -61,8 +61,8 @@
           <input type="text" id="plan-name" maxlength="20" placeholder="例如：信貸" required />
         </label>
         <label>
-          總預算（台幣）
-          <input type="text" id="plan-budget" inputmode="decimal" placeholder="留空則沿用來源計畫" />
+          總預算（台幣，選填）
+          <input type="text" id="plan-budget" inputmode="decimal" placeholder="留空＝不設目標，只記錄持股與損益" />
         </label>
         <label id="plan-copy-from-label">
           從既有計畫複製
@@ -101,14 +101,14 @@
         <div class="kpi-value" id="kpi-realized">—</div>
         <div class="kpi-sub" id="kpi-realized-sub">賣出損益＋股利</div>
       </div>
-      <div class="kpi">
+      <div class="kpi" id="kpi-progress-card">
         <div class="kpi-label">整體投資進度</div>
         <div class="kpi-value" id="kpi-progress">—</div>
         <div class="kpi-sub" id="kpi-progress-sub">目標 NT$5,000,000</div>
       </div>
     </section>
 
-    <section class="card">
+    <section class="card" id="overall-progress-card">
       <div class="overall-progress">
         <div class="overall-progress-head">
           <span>資金投入進度</span>
@@ -146,7 +146,7 @@
         <h2>資產類別配置</h2>
         <div class="chart-actions">
           <div class="segmented" id="basis-control">
-            <button type="button" data-basis="target">目標配置</button>
+            <button type="button" data-basis="target" id="basis-target-btn">目標配置</button>
             <button type="button" data-basis="invested">投入成本</button>
             <button type="button" data-basis="value">目前市值</button>
           </div>
@@ -164,7 +164,7 @@
 
     <section class="card" id="editor-card" hidden>
       <h2>編輯投資標的</h2>
-      <label class="budget-field">
+      <label class="budget-field" id="edit-budget-field">
         總預算（台幣）
         <input type="text" id="edit-budget" inputmode="decimal" />
       </label>
@@ -219,7 +219,7 @@
       <p class="hint">※ SK hynix 未在台/美上市，以韓國原股 000660.KS 報價（可透過複委託買入）。美股、韓股金額以即時匯率換算為台幣。</p>
     </section>
 
-    <section class="card">
+    <section class="card" id="rebalance-card">
       <div class="card-head">
         <div>
           <h2>再平衡建議</h2>

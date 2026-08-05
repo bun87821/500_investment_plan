@@ -271,6 +271,40 @@ test('舊格式帳號資料寫入後回讀，帶有遷移結果', async (t) => {
   assert.equal(body.snapshots[0].planId, body.plans[0].id);
 });
 
+test('PUT 驗證：純記錄型計畫的 budget 可省略或為 null', async (t) => {
+  const srv = await startServer();
+  t.after(() => srv.stop());
+
+  const res = await fetch(srv.url + '/api/portfolio', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      transactions: [],
+      plans: [
+        { id: 'p1', name: '不填', allocations: {} },
+        { id: 'p2', name: '填 null', budget: null },
+        { id: 'p3', name: '有目標', budget: 1_500_000 },
+      ],
+    }),
+  });
+  assert.equal(res.status, 200);
+
+  const saved = await (await fetch(srv.url + '/api/portfolio')).json();
+  assert.equal(saved.plans[0].budget, undefined);
+  assert.equal(saved.plans[1].budget, null);
+  assert.equal(saved.plans[2].budget, 1_500_000);
+
+  // 有值時仍必須是正數
+  for (const bad of [0, -1, 'x']) {
+    const r = await fetch(srv.url + '/api/portfolio', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transactions: [], plans: [{ id: 'p1', name: 'A', budget: bad }] }),
+    });
+    assert.equal(r.status, 400, String(bad));
+  }
+});
+
 test('記錄今日市值：每個計畫各存一筆快照', async (t) => {
   const srv = await startServer();
   t.after(() => srv.stop());

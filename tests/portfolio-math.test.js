@@ -819,3 +819,14 @@ test('單一計畫的月報：另一計畫的雜訊交易不得影響結果（�
   assert.equal(rows[1].pnl, 110);
   assert.ok(Math.abs(rows[1].twr - 0.1) < 1e-12);
 });
+
+test('computeStock：純記錄型計畫（無總預算）沒有目標金額與達成率', () => {
+  // 買 100@500 = 50,000；無總預算 → 目標金額 0、達成率 null（不是 0，也不是 Infinity）
+  const txs = [{ stockId: 'aaa', date: '2026-01-05', shares: 100, price: 500 }];
+  const r = PM.computeStock(TW_STOCK, txs, { 'AAA.TW': { price: 600 } }, 0);
+  assert.equal(r.invested, 50_000);
+  assert.equal(r.valueTWD, 60_000);
+  assert.equal(r.pnl, 10_000); // 損益照算
+  assert.equal(r.targetTWD, 0);
+  assert.equal(r.progress, null);
+});
