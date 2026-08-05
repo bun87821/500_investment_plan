@@ -2,17 +2,27 @@
 
 const DEFAULT_STOCKS = [
   { id: '2330', name: '台積電', symbol: '2330.TW', market: '台股', currency: 'TWD', category: '晶圓代工', percent: 25 },
+  { id: '006208', name: '富邦台50', symbol: '006208.TW', market: '台灣', currency: 'TWD', category: '大盤', percent: 0 },
+  { id: '0050', name: '元大台灣50', symbol: '0050.TW', market: '台灣', currency: 'TWD', category: '大盤', percent: 0 },
+  { id: '1802', name: '台玻', symbol: '1802.TW', market: '台灣', currency: 'TWD', category: '原料供應商', percent: 0 },
   { id: 'TSM', name: 'TSM ADR', symbol: 'TSM', market: '美股', currency: 'USD', category: '晶圓代工', percent: 25 },
   { id: 'HYNIX', name: 'SK hynix', symbol: '000660.KS', market: '韓股', currency: 'KRW', category: '記憶體', percent: 10 },
   { id: 'NVDA', name: 'NVIDIA', symbol: 'NVDA', market: '美股', currency: 'USD', category: 'IC設計', percent: 7 },
   { id: '2308', name: '台達電', symbol: '2308.TW', market: '台股', currency: 'TWD', category: '電源', percent: 7 },
+  { id: '2345', name: '智邦', symbol: '2345.TW', market: '台灣', currency: 'TWD', category: '網路通訊', percent: 0 },
   { id: '2383', name: '台光電', symbol: '2383.TW', market: '台股', currency: 'TWD', category: '銅箔基板', percent: 5 },
+  { id: '2454', name: '聯發科', symbol: '2454.TW', market: '台灣', currency: 'TWD', category: 'IC設計', percent: 0 },
+  { id: '2615', name: '萬海', symbol: '2615.TW', market: '台灣', currency: 'TWD', category: '航運', percent: 0 },
   { id: '3017', name: '奇鋐', symbol: '3017.TW', market: '台股', currency: 'TWD', category: '散熱', percent: 5 },
+  { id: '3231', name: '緯創', symbol: '3231.TW', market: '台灣', currency: 'TWD', category: '機櫃', percent: 0 },
   { id: 'MU', name: 'Micron', symbol: 'MU', market: '美股', currency: 'USD', category: '記憶體', percent: 5 },
   { id: 'AVGO', name: 'Broadcom', symbol: 'AVGO', market: '美股', currency: 'USD', category: 'IC設計', percent: 3 },
   { id: '3324', name: '雙鴻', symbol: '3324.TWO', market: '上櫃', currency: 'TWD', category: '散熱', percent: 3 },
   { id: '2368', name: '金像電', symbol: '2368.TW', market: '台股', currency: 'TWD', category: 'PCB/載板', percent: 3 },
   { id: '3037', name: '欣興', symbol: '3037.TW', market: '台股', currency: 'TWD', category: 'PCB/載板', percent: 2 },
+  { id: '3653', name: '健策', symbol: '3653.TW', market: '台灣', currency: 'TWD', category: '散熱', percent: 0 },
+  { id: '5009', name: '榮剛', symbol: '5009.TWO', market: '台北', currency: 'TWD', category: '傳產', percent: 0 },
+  { id: '6788', name: '華景電', symbol: '6788.TWO', market: '台北', currency: 'TWD', category: '廠務', percent: 0 },
 ];
 
 const CURRENCIES = ['TWD', 'USD', 'KRW', 'JPY', 'HKD'];
@@ -122,6 +132,22 @@ const quoteUrlOf = (symbol) => {
   return /\.TW$|\.TWO$/.test(String(symbol || '')) ? `https://tw.stock.yahoo.com/quote/${s}` : `https://finance.yahoo.com/quote/${s}`;
 };
 
+function mergeDefaultStocks(stocks) {
+  const defaultById = new Map(DEFAULT_STOCKS.map((s) => [s.id, s]));
+  const merged = (Array.isArray(stocks) ? stocks : [])
+    .filter((s) => s && s.id && s.symbol)
+    .map((s) => ({
+      ...s,
+      category: s.category || defaultById.get(s.id)?.category || '未分類',
+    }));
+  const seenIds = new Set(merged.map((s) => s.id));
+  const seenSymbols = new Set(merged.map((s) => String(s.symbol).toUpperCase()));
+  for (const s of DEFAULT_STOCKS) {
+    if (!seenIds.has(s.id) && !seenSymbols.has(String(s.symbol).toUpperCase())) merged.push({ ...s });
+  }
+  return merged;
+}
+
 // ---------- 資料存取 ----------
 function applyDoc(raw) {
   // 舊格式在載入時就地遷移（記憶體），下一次存檔才落地到伺服器
@@ -135,13 +161,7 @@ function applyDoc(raw) {
   state.transactions = Array.isArray(data.transactions) ? data.transactions : [];
   state.snapshots = Array.isArray(data.snapshots) ? data.snapshots : [];
   state.ignoredEvents = Array.isArray(data.ignoredEvents) ? data.ignoredEvents : [];
-  if (Array.isArray(data.stocks) && data.stocks.length) {
-    // 舊資料可能沒有 category 欄位，依 id 對回預設分類，找不到則標為「未分類」
-    state.stocks = data.stocks.map((s) => ({
-      ...s,
-      category: s.category || DEFAULT_STOCKS.find((d) => d.id === s.id)?.category || '未分類',
-    }));
-  }
+  state.stocks = mergeDefaultStocks(Array.isArray(data.stocks) && data.stocks.length ? data.stocks : state.stocks);
   selectPlan(localStorage.getItem(activePlanKey()));
 }
 
@@ -170,6 +190,7 @@ function tryApplyBackup(key) {
 
 // 完全沒有資料可套用時（訪客且無備份）applyDoc 不會跑到，這裡補上預設計畫
 function ensurePlans() {
+  state.stocks = mergeDefaultStocks(state.stocks);
   if (!state.plans.length) {
     state.plans = PortfolioMath.migratePortfolio({ stocks: state.stocks }).plans;
     selectPlan(localStorage.getItem(activePlanKey()));
