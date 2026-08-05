@@ -253,8 +253,27 @@ test('端對端：計畫分頁切換後數字跟著換，重新載入回到上�
   await page.waitForTimeout(500);
   assert.equal(await page.locator('#tx-body tr').count(), 1);
 
+  // --- 目標配置比例跟著計畫走 ---
+  await page.click('#edit-stocks-btn');
+  assert.ok((await page.textContent('#editor-percent-head')).includes('信貸'), '比例欄標題應標明目前計畫');
+  // 信貸只排台積電 40%，其餘留 0
+  const percentInputs = page.locator('#editor-body .e-percent');
+  const rowCount = await percentInputs.count();
+  for (let i = 0; i < rowCount; i++) await percentInputs.nth(i).fill(i === 0 ? '40' : '0');
+  await page.click('#editor-save');
+  await page.waitForTimeout(500);
+  const creditFoot = await page.textContent('#holdings-foot');
+  assert.ok(creditFoot.includes('40%'), '信貸的目標比例合計應是 40%，實際：' + creditFoot);
+
+  // 切回主要計畫：比例是它自己那一套（預設合計 100%）
+  await page.click('.plan-tab:has-text("主要計畫")');
+  await page.waitForTimeout(400);
+  assert.ok((await page.textContent('#holdings-foot')).includes('100%'), '主要計畫的比例不應被信貸的修改影響');
+
   const saved = await (await fetch(srv.url + '/api/portfolio')).json();
   assert.equal(saved.plans.length, 2);
+  assert.deepEqual(saved.plans[1].allocations, { '2330': 40 });
+  assert.equal(Object.keys(saved.plans[0].allocations).length, 12, '主要計畫仍有自己的 12 檔目標配置');
   assert.equal(saved.plans[1].name, '信貸');
   assert.equal(saved.plans[1].budget, 1_500_000);
   const added = saved.transactions.find((x) => x.shares === 50);

@@ -82,6 +82,9 @@ const activePlanKey = () => 'active-plan:' + (state.user?.sub || 'local');
 const activePlan = () => state.plans.find((p) => p.id === state.activePlanId) || state.plans[0] || null;
 const planBudget = () => activePlan()?.budget || DEFAULT_BUDGET;
 const planTxs = () => PortfolioMath.transactionsInPlan(state.transactions, activePlan()?.id);
+// 目標配置比例跟著計畫走：標的清單全帳號共用，percent 由目前計畫的 allocations 提供
+const planPercentOf = (stockId) => Number(activePlan()?.allocations?.[stockId]) || 0;
+const planStocks = () => state.stocks.map((s) => ({ ...s, percent: planPercentOf(s.id) }));
 
 // 啟用登入但尚未登入 → 訪客模式：資料只存瀏覽器 localStorage，不打伺服器
 const isGuest = () => state.authEnabled && !state.user;
@@ -124,6 +127,10 @@ function applyDoc(raw) {
   const data = PortfolioMath.migratePortfolio({ ...raw, stocks: Array.isArray(raw.stocks) && raw.stocks.length ? raw.stocks : state.stocks });
   if (data.rev !== undefined) state.rev = Number(data.rev) || 0;
   state.plans = data.plans;
+  // 帳號資料還沒有標的清單（新帳號、或只用 API 寫入交易的資料）→ 標的與目標配置一起套用預設
+  if (!(Array.isArray(raw.stocks) && raw.stocks.length) && state.plans[0] && !Object.keys(state.plans[0].allocations || {}).length) {
+    state.plans[0].allocations = Object.fromEntries(DEFAULT_STOCKS.filter((s) => s.percent > 0).map((s) => [s.id, s.percent]));
+  }
   state.transactions = Array.isArray(data.transactions) ? data.transactions : [];
   state.snapshots = Array.isArray(data.snapshots) ? data.snapshots : [];
   state.ignoredEvents = Array.isArray(data.ignoredEvents) ? data.ignoredEvents : [];
@@ -474,7 +481,7 @@ function initPlans() {
 // ---------- 畫面 ----------
 function render() {
   renderPlanTabs();
-  const rows = sortedByTargetPercent(state.stocks.map(computeStock), (r) => r.stock);
+  const rows = sortedByTargetPercent(planStocks().map(computeStock), (r) => r.stock);
 
   const totalInvested = rows.reduce((s, r) => s + (r.invested ?? 0), 0);
   const anyValueMissing = rows.some((r) => r.valueTWD == null);
@@ -943,7 +950,7 @@ function renderHoldings(rows, totalInvested, totalValue, totalPnl) {
     body.appendChild(tr);
   }
 
-  const totalPercent = state.stocks.reduce((s, x) => s + (Number(x.percent) || 0), 0);
+  const totalPercent = state.stocks.reduce((s, x) => s + planPercentOf(x.id), 0);
   $('holdings-foot').innerHTML = `
     <tr>
       <td>合計</td>
@@ -1600,11 +1607,13 @@ function rebalanceEditorPercents() {
 }
 
 function openEditor() {
+  // 標的基本資料全帳號共用，比例只改目前計畫的目標配置 — 欄位標題標明是哪個計畫
+  $('editor-percent-head').textContent = `目標％（${activePlan()?.name || ''}）`;
   $('edit-budget').value = planBudget();
   refreshCategoryDatalist();
   const body = $('editor-body');
   body.innerHTML = '';
-  for (const s of sortedByTargetPercent(state.stocks)) body.appendChild(editorRow(s));
+  for (const s of sortedByTargetPercent(planStocks())) body.appendChild(editorRow(s));
   updateEditorTotal();
   $('editor-card').hidden = false;
   $('edit-stocks-btn').hidden = true;
@@ -1659,8 +1668,11 @@ function saveEditor() {
     return;
   }
 
-  activePlan().budget = budget;
-  state.stocks = sortedByTargetPercent(stocks);
+  const plan = activePlan();
+  plan.budget = budget;
+  plan.allocations = {};
+  for (const s of stocks) if (s.percent > 0) plan.allocations[s.id] = s.percent;
+  state.stocks = sortedByTargetPercent(stocks).map(({ percent, ...rest }) => rest);
   savePortfolio();
   rebuildStockSelect();
   closeEditor();
@@ -1801,7 +1813,7 @@ function initForm() {
     try {
       if (isGuest()) {
         await loadQuotes();
-        const rows = sortedByTargetPercent(state.stocks.map(computeStock), (r) => r.stock);
+        const rows = sortedByTargetPercent(planStocks().map(computeStock), (r) => r.stock);
         const snapshot = snapshotFromRows(rows, 'manual');
         upsertLocalSnapshot(snapshot);
         await savePortfolio({ includeSnapshots: true });
