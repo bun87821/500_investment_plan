@@ -695,3 +695,46 @@ test('單一計畫的 XIRR：另一計畫的雜訊交易不得影響結果（沿
   const r = PM.computeXirr(xirrArgs(PM.transactionsInPlan(txs, 'retire'), [{ valueTWD: 2_750 }], '2009-04-01'));
   assert.ok(Math.abs(r - 0.373362535) < 1e-6, `expect 0.373362535, got ${r}`);
 });
+
+// ---------- 多計畫：刪除計畫 ----------
+
+test('transactionsOnlyInPlan：只有「唯一標籤就是這個計畫」的交易才算孤兒', () => {
+  const txs = [
+    { id: 'only', plans: ['credit'] },
+    { id: 'both', plans: ['credit', 'retire'] },
+    { id: 'other', plans: ['retire'] },
+    { id: 'untagged' }, // 沒有標籤 = 每個計畫都看得到，不算孤兒
+  ];
+  assert.deepEqual(
+    PM.transactionsOnlyInPlan(txs, 'credit').map((t) => t.id),
+    ['only']
+  );
+});
+
+test('removePlan：孤兒交易一併刪除，共用的交易只移除這個標籤', () => {
+  const doc = {
+    plans: [
+      { id: 'credit', name: '信貸', budget: 1_500_000, allocations: {} },
+      { id: 'retire', name: '退休', budget: 5_000_000, allocations: {} },
+    ],
+    transactions: [
+      { id: 'only', plans: ['credit'] },
+      { id: 'both', plans: ['credit', 'retire'] },
+      { id: 'other', plans: ['retire'] },
+    ],
+    snapshots: [
+      { date: '2026-01-05', planId: 'credit' },
+      { date: '2026-01-05', planId: 'retire' },
+    ],
+  };
+  const out = PM.removePlan(doc, 'credit');
+
+  assert.deepEqual(out.plans.map((p) => p.id), ['retire']);
+  assert.deepEqual(out.transactions.map((t) => t.id), ['both', 'other']);
+  assert.deepEqual(out.transactions[0].plans, ['retire']); // 共用的只掉標籤
+  assert.deepEqual(out.snapshots.map((s) => s.planId), ['retire']);
+
+  // 不就地修改輸入
+  assert.equal(doc.transactions.length, 3);
+  assert.deepEqual(doc.transactions[1].plans, ['credit', 'retire']);
+});

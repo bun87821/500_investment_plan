@@ -969,3 +969,38 @@ tfoot td {
   color: var(--text-primary);
   cursor: pointer;
 }
+
+/* ---- 管理計畫 ---- */
+.plan-rows { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.plan-row { display: flex; gap: 6px; align-items: center; }
+.plan-row input {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--page);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.9rem;
+}
+.plan-row-name { flex: 1 1 140px; min-width: 0; }
+.plan-row-budget { flex: 0 1 130px; text-align: right; font-variant-numeric: tabular-nums; }
+.plan-row .btn { padding: 4px 8px; font-size: 0.85rem; }
+.plan-row .btn[disabled] { opacity: 0.35; cursor: default; }
+.plan-confirm {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+  font-size: 0.85rem;
+}
+.plan-confirm-row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.plan-confirm-row input {
+  flex: 1 1 180px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--page);
+  color: var(--text-primary);
+  font-family: inherit;
+}

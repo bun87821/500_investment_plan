@@ -306,5 +306,45 @@ test('端對端：計畫分頁切換後數字跟著換，重新載入回到上�
   const shared = saved.transactions.find((x) => x.shares === 10 && x.stockId === 'TSM');
   assert.deepEqual([...shared.plans].sort(), ['plan-1', 'plan-2']);
 
+  // --- 管理計畫：改名、改總預算、調順序、刪除 ---
+  await page.click('#plan-manage-btn');
+  const creditRow = page.locator('.plan-row[data-plan-id="plan-2"]');
+  await creditRow.locator('.plan-row-name').fill('信貸操作');
+  await creditRow.locator('.plan-row-name').blur();
+  await creditRow.locator('.plan-row-budget').fill('2000000');
+  await creditRow.locator('.plan-row-budget').blur();
+  await page.waitForTimeout(400);
+  assert.deepEqual(await page.locator('.plan-tab').allTextContents(), ['主要計畫', '信貸操作']);
+
+  // 上移 → 分頁順序對調
+  await page.locator('.plan-row[data-plan-id="plan-2"] .plan-move[data-dir="-1"]').click();
+  await page.waitForTimeout(400);
+  assert.deepEqual(await page.locator('.plan-tab').allTextContents(), ['信貸操作', '主要計畫']);
+
+  // 改後的總預算生效
+  await page.click('.plan-tab:has-text("信貸操作")');
+  await page.waitForTimeout(400);
+  assert.ok((await page.textContent('#subtitle')).includes('NT$2,000,000'));
+
+  // 刪除：先看到會連帶刪幾筆，名稱打對才能按
+  await page.click('#plan-manage-btn');
+  await page.locator('.plan-row[data-plan-id="plan-2"] .plan-delete').click();
+  const confirmText = await page.textContent('.plan-confirm');
+  assert.ok(confirmText.includes('1'), '應顯示只屬於這個計畫的交易筆數：' + confirmText);
+  assert.ok(await page.locator('#plan-confirm-btn').isDisabled(), '名稱還沒打對前不能刪');
+  await page.fill('#plan-confirm-input', '信貸');
+  assert.ok(await page.locator('#plan-confirm-btn').isDisabled(), '名稱不完全相符仍不能刪');
+  await page.fill('#plan-confirm-input', '信貸操作');
+  assert.ok(await page.locator('#plan-confirm-btn').isEnabled());
+  await page.click('#plan-confirm-btn');
+  await page.waitForTimeout(600);
+
+  assert.deepEqual(await page.locator('.plan-tab').allTextContents(), ['主要計畫']);
+  const after = await (await fetch(srv.url + '/api/portfolio')).json();
+  assert.equal(after.plans.length, 1);
+  assert.equal(after.transactions.some((x) => x.shares === 50), false, '只屬於它的交易應一併刪除');
+  const stillShared = after.transactions.find((x) => x.shares === 10 && x.stockId === 'TSM');
+  assert.deepEqual(stillShared.plans, ['plan-1'], '共用的交易保留，只掉標籤');
+
   assert.deepEqual(jsErrors, [], 'JS errors: ' + jsErrors.join('; '));
 });

@@ -436,15 +436,68 @@ async function switchPlan(planId) {
   await loadHistory();
 }
 
+let deletingPlanId = null; // 正在等待打字確認的計畫
+
+// 管理計畫：每個計畫一列，可改名、改總預算、調順序、刪除
+function renderPlanRows() {
+  const wrap = $('plan-rows');
+  wrap.innerHTML = '';
+  state.plans.forEach((p, i) => {
+    const row = document.createElement('div');
+    row.className = 'plan-row';
+    row.dataset.planId = p.id;
+    row.innerHTML = `
+      <input class="plan-row-name" type="text" maxlength="20" value="${esc(p.name)}" aria-label="計畫名稱" />
+      <input class="plan-row-budget" type="text" inputmode="decimal" value="${Number(p.budget) || 0}" aria-label="總預算" />
+      <button type="button" class="btn btn-ghost plan-move" data-dir="-1" ${i === 0 ? 'disabled' : ''} aria-label="上移">↑</button>
+      <button type="button" class="btn btn-ghost plan-move" data-dir="1" ${i === state.plans.length - 1 ? 'disabled' : ''} aria-label="下移">↓</button>
+      <button type="button" class="btn btn-ghost plan-delete" ${state.plans.length < 2 ? 'disabled title="最後一個計畫不能刪除"' : ''}>刪除</button>`;
+    wrap.appendChild(row);
+
+    if (deletingPlanId === p.id) {
+      const orphans = PortfolioMath.transactionsOnlyInPlan(state.transactions, p.id).length;
+      const confirmRow = document.createElement('div');
+      confirmRow.className = 'plan-confirm';
+      confirmRow.innerHTML = `
+        <p>刪除「${esc(p.name)}」將連帶刪除 <strong>${orphans}</strong> 筆只屬於它的交易，無法復原。同時掛在其他計畫的交易會保留。</p>
+        <div class="plan-confirm-row">
+          <input type="text" id="plan-confirm-input" placeholder="輸入「${esc(p.name)}」確認" aria-label="輸入計畫名稱確認" />
+          <button type="button" class="btn btn-primary" id="plan-confirm-btn" disabled>確認刪除</button>
+          <button type="button" class="btn" id="plan-confirm-cancel">取消</button>
+        </div>`;
+      wrap.appendChild(confirmRow);
+    }
+  });
+}
+
 function openPlanCard() {
+  deletingPlanId = null;
   $('plan-name').value = '';
   $('plan-budget').value = '';
+  renderPlanRows();
   $('plan-card').hidden = false;
   $('plan-name').focus();
 }
 
 function closePlanCard() {
+  deletingPlanId = null;
   $('plan-card').hidden = true;
+}
+
+async function deletePlan(planId) {
+  const doc = PortfolioMath.removePlan(
+    { plans: state.plans, transactions: state.transactions, snapshots: state.snapshots },
+    planId
+  );
+  state.plans = doc.plans;
+  state.transactions = doc.transactions;
+  state.snapshots = doc.snapshots;
+  deletingPlanId = null;
+  selectPlan(state.activePlanId); // 刪掉的是目前計畫 → 退回第一個
+  renderPlanRows();
+  await savePortfolio();
+  render();
+  await loadHistory();
 }
 
 // 計畫識別碼不隨名稱改變，取最小的未使用序號
@@ -464,6 +517,56 @@ function initPlans() {
   });
   $('plan-cancel').addEventListener('click', closePlanCard);
   $('tx-plans').addEventListener('change', updateTxPlansHint);
+
+  // 管理計畫的列：改名、改總預算、調順序、刪除
+  $('plan-rows').addEventListener('change', async (e) => {
+    const row = e.target.closest('.plan-row');
+    if (!row) return;
+    const plan = state.plans.find((p) => p.id === row.dataset.planId);
+    if (!plan) return;
+    if (e.target.classList.contains('plan-row-name')) {
+      const name = e.target.value.trim();
+      if (!name) return (e.target.value = plan.name);
+      plan.name = name;
+    } else if (e.target.classList.contains('plan-row-budget')) {
+      const budget = parseDecimalInput(e.target.value);
+      if (!(budget > 0)) return (e.target.value = plan.budget);
+      plan.budget = budget;
+    } else return;
+    await savePortfolio();
+    render();
+  });
+
+  $('plan-rows').addEventListener('input', (e) => {
+    if (e.target.id !== 'plan-confirm-input') return;
+    const plan = state.plans.find((p) => p.id === deletingPlanId);
+    $('plan-confirm-btn').disabled = !plan || e.target.value.trim() !== plan.name;
+  });
+
+  $('plan-rows').addEventListener('click', async (e) => {
+    if (e.target.id === 'plan-confirm-cancel') {
+      deletingPlanId = null;
+      return renderPlanRows();
+    }
+    if (e.target.id === 'plan-confirm-btn') return deletePlan(deletingPlanId);
+
+    const row = e.target.closest('.plan-row');
+    if (!row) return;
+    const idx = state.plans.findIndex((p) => p.id === row.dataset.planId);
+    if (idx < 0) return;
+    if (e.target.classList.contains('plan-move')) {
+      const to = idx + Number(e.target.dataset.dir);
+      if (to < 0 || to >= state.plans.length) return;
+      [state.plans[idx], state.plans[to]] = [state.plans[to], state.plans[idx]];
+      renderPlanRows();
+      await savePortfolio();
+      render();
+    } else if (e.target.classList.contains('plan-delete')) {
+      deletingPlanId = state.plans[idx].id;
+      renderPlanRows();
+      $('plan-confirm-input')?.focus();
+    }
+  });
   $('plan-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const name = $('plan-name').value.trim();

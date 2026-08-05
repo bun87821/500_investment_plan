@@ -138,6 +138,25 @@
     );
   }
 
+  // 只屬於這個計畫的交易——刪除計畫時會跟著消失的那些
+  function transactionsOnlyInPlan(transactions, planId) {
+    return (Array.isArray(transactions) ? transactions : []).filter(
+      (t) => Array.isArray(t.plans) && t.plans.length === 1 && t.plans[0] === planId
+    );
+  }
+
+  // 刪除計畫：孤兒交易與該計畫的快照一併刪除，同時掛在其他計畫的交易只移除這個標籤
+  function removePlan(doc, planId) {
+    return {
+      ...doc,
+      plans: (doc.plans || []).filter((p) => p.id !== planId),
+      transactions: (doc.transactions || [])
+        .filter((t) => !(Array.isArray(t.plans) && t.plans.length === 1 && t.plans[0] === planId))
+        .map((t) => (Array.isArray(t.plans) && t.plans.includes(planId) ? { ...t, plans: t.plans.filter((p) => p !== planId) } : t)),
+      snapshots: (doc.snapshots || []).filter((s) => s.planId !== planId),
+    };
+  }
+
   function msToDateStr(ms) {
     return new Date(ms).toISOString().slice(0, 10);
   }
@@ -505,6 +524,8 @@
     DEFAULT_BUDGET,
     migratePortfolio,
     transactionsInPlan,
+    transactionsOnlyInPlan,
+    removePlan,
     computeStock,
     computeDailySeries,
     computeMonthlyReport,
