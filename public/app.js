@@ -672,16 +672,14 @@ function initPlans() {
 function render() {
   renderPlanTabs();
   const rows = sortedByTargetPercent(planStocks().map(computeStock), (r) => r.stock);
-  const holdingRows = hasTarget()
-    ? rows
-    : rows.filter(
-        (r) =>
-          r.shares !== 0 ||
-          (r.invested ?? 0) !== 0 ||
-          (r.valueTWD ?? 0) !== 0 ||
-          (r.realized ?? 0) !== 0 ||
-          (r.dividends ?? 0) !== 0
-      );
+  const hasHoldingActivity = (r) =>
+    r.shares !== 0 ||
+    (r.invested ?? 0) !== 0 ||
+    (r.valueTWD ?? 0) !== 0 ||
+    (r.realized ?? 0) !== 0 ||
+    (r.dividends ?? 0) !== 0;
+  const holdingRows = rows.filter((r) => Number(r.stock.percent) > 0 || hasHoldingActivity(r));
+  const targetStockCount = rows.filter((r) => Number(r.stock.percent) > 0).length;
 
   const totalInvested = rows.reduce((s, r) => s + (r.invested ?? 0), 0);
   const anyValueMissing = rows.some((r) => r.valueTWD == null);
@@ -690,7 +688,7 @@ function render() {
   const overallProgress = hasTarget() ? totalInvested / planBudget() : null;
 
   $('subtitle').textContent = hasTarget()
-    ? `總預算 ${fmtTWD(planBudget())} ・ ${state.stocks.length} 檔標的目標配置`
+    ? `總預算 ${fmtTWD(planBudget())} ・ ${targetStockCount} 檔標的目標配置`
     : `純記錄型計畫 ・ 只記錄持股與損益，不設目標`;
 
   $('kpi-invested').textContent = fmtTWD(totalInvested);
