@@ -777,3 +777,45 @@ test('plansHoldingOn：分割日／除息日當天持有該標的的計畫才需
   assert.deepEqual(PM.plansHoldingOn(plans, txs, 'aaa', '2026-03-01'), ['retire']);
   assert.deepEqual(PM.plansHoldingOn(plans, txs, 'bbb', '2026-01-01'), ['empty']);
 });
+
+test('單一計畫的月報：另一計畫的雜訊交易不得影響結果（手算）', () => {
+  // 收盤：01-05 = 100、01-06 = 110、02-02 = 121
+  // 退休計畫 01-05 買 10@100 → 投入 1,000、市值 1,000
+  //   01-06 市值 1,100，當日損益 +100、dPct = 100/1,000 = 10%
+  //   02-02 市值 1,210，當日損益 +110、dPct = 110/1,100 = 10%
+  // 月報：2026-01 投入 1,000、損益 +100、TWR 10%；2026-02 投入 0、損益 +110、TWR 10%
+  const history = {
+    series: {
+      'AAA.TW': [
+        [D(2026, 1, 5), 100],
+        [D(2026, 1, 6), 110],
+        [D(2026, 2, 2), 121],
+      ],
+    },
+  };
+  const txs = [
+    { stockId: 'aaa', date: '2026-01-05', shares: 10, price: 100, plans: ['retire'] },
+    // 雜訊：信貸計畫在同一天買了五倍的量
+    { stockId: 'aaa', date: '2026-01-05', shares: 50, price: 100, plans: ['credit'] },
+  ];
+  const series = PM.computeDailySeries({
+    history,
+    stocks: [TW_STOCK],
+    transactions: PM.transactionsInPlan(txs, 'retire'),
+    quotes: {},
+    budget: 0,
+    benchSymbol: '0050.TW',
+    today: '2026-02-02',
+  });
+  const rows = PM.computeMonthlyReport({ series, benchCloses: [] });
+
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].month, '2026-01');
+  assert.equal(rows[0].flow, 1000);
+  assert.equal(rows[0].pnl, 100);
+  assert.ok(Math.abs(rows[0].twr - 0.1) < 1e-12);
+  assert.equal(rows[1].month, '2026-02');
+  assert.equal(rows[1].flow, 0);
+  assert.equal(rows[1].pnl, 110);
+  assert.ok(Math.abs(rows[1].twr - 0.1) < 1e-12);
+});

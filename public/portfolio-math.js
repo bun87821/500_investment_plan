@@ -139,10 +139,17 @@
   }
 
   // 只屬於這個計畫的交易——刪除計畫時會跟著消失的那些
+  const onlyInPlan = (t, planId) => Array.isArray(t.plans) && t.plans.length === 1 && t.plans[0] === planId;
+
   function transactionsOnlyInPlan(transactions, planId) {
-    return (Array.isArray(transactions) ? transactions : []).filter(
-      (t) => Array.isArray(t.plans) && t.plans.length === 1 && t.plans[0] === planId
-    );
+    return (Array.isArray(transactions) ? transactions : []).filter((t) => onlyInPlan(t, planId));
+  }
+
+  // 同一天同一個計畫只留一筆快照；前後端共用同一套 upsert 規則
+  function upsertSnapshots(snapshots, incoming) {
+    const replaced = new Set(incoming.map((s) => s.date + '|' + s.planId));
+    const kept = (Array.isArray(snapshots) ? snapshots : []).filter((s) => !replaced.has(s.date + '|' + s.planId));
+    return [...kept, ...incoming].sort((a, b) => String(a.date).localeCompare(String(b.date)));
   }
 
   // 從既有計畫複製交易：產生獨立副本（新的交易 id、只掛新計畫），來源不受影響。
@@ -157,7 +164,7 @@
       ...doc,
       plans: (doc.plans || []).filter((p) => p.id !== planId),
       transactions: (doc.transactions || [])
-        .filter((t) => !(Array.isArray(t.plans) && t.plans.length === 1 && t.plans[0] === planId))
+        .filter((t) => !onlyInPlan(t, planId))
         .map((t) => (Array.isArray(t.plans) && t.plans.includes(planId) ? { ...t, plans: t.plans.filter((p) => p !== planId) } : t)),
       snapshots: (doc.snapshots || []).filter((s) => s.planId !== planId),
     };
@@ -544,6 +551,7 @@
     migratePortfolio,
     transactionsInPlan,
     transactionsOnlyInPlan,
+    upsertSnapshots,
     copyTransactionsToPlan,
     plansHoldingOn,
     removePlan,

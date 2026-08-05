@@ -268,6 +268,12 @@ test('端對端：計畫分頁切換後數字跟著換，重新載入回到上�
   await page.fill('#tx-price', '230');
   await page.locator('#tx-plans input').first().check(); // 也勾主要計畫
   assert.ok(await page.locator('#tx-plans-hint').isVisible(), '勾選兩個計畫時應出現重複計入的提示');
+  // 回歸：畫面重繪（切圖表範圍、更新報價…）不得把已勾好的計畫沖掉
+  await page.click('#hist-range-control button[data-range="1mo"]');
+  await page.waitForTimeout(300);
+  assert.equal(await page.locator('#tx-plans input:checked').count(), 2, '重繪後勾選應保留');
+  await page.click('#hist-range-control button[data-range="all"]');
+  await page.waitForTimeout(300);
   await page.click('#tx-submit');
   await page.waitForTimeout(500);
   assert.equal(await page.locator('#tx-body tr').count(), 2, '信貸應看到這筆');
@@ -301,14 +307,15 @@ test('端對端：計畫分頁切換後數字跟著換，重新載入回到上�
   assert.equal(Object.keys(saved.plans[0].allocations).length, 12, '主要計畫仍有自己的 12 檔目標配置');
   assert.equal(saved.plans[1].name, '信貸');
   assert.equal(saved.plans[1].budget, 1_500_000);
+  const creditPlanId = saved.plans[1].id;
   const added = saved.transactions.find((x) => x.shares === 50);
-  assert.deepEqual(added.plans, ['plan-2']);
+  assert.deepEqual(added.plans, [creditPlanId]);
   const shared = saved.transactions.find((x) => x.shares === 10 && x.stockId === 'TSM');
-  assert.deepEqual([...shared.plans].sort(), ['plan-1', 'plan-2']);
+  assert.deepEqual([...shared.plans].sort(), ['plan-1', creditPlanId].sort());
 
   // --- 管理計畫：改名、改總預算、調順序、刪除 ---
   await page.click('#plan-manage-btn');
-  const creditRow = page.locator('.plan-row[data-plan-id="plan-2"]');
+  const creditRow = page.locator(`.plan-row[data-plan-id="${creditPlanId}"]`);
   await creditRow.locator('.plan-row-name').fill('信貸操作');
   await creditRow.locator('.plan-row-name').blur();
   await creditRow.locator('.plan-row-budget').fill('2000000');
@@ -317,7 +324,7 @@ test('端對端：計畫分頁切換後數字跟著換，重新載入回到上�
   assert.deepEqual(await page.locator('.plan-tab').allTextContents(), ['主要計畫', '信貸操作']);
 
   // 上移 → 分頁順序對調
-  await page.locator('.plan-row[data-plan-id="plan-2"] .plan-move[data-dir="-1"]').click();
+  await page.locator(`.plan-row[data-plan-id="${creditPlanId}"] .plan-move[data-dir="-1"]`).click();
   await page.waitForTimeout(400);
   assert.deepEqual(await page.locator('.plan-tab').allTextContents(), ['信貸操作', '主要計畫']);
 
@@ -328,7 +335,7 @@ test('端對端：計畫分頁切換後數字跟著換，重新載入回到上�
 
   // 刪除：先看到會連帶刪幾筆，名稱打對才能按
   await page.click('#plan-manage-btn');
-  await page.locator('.plan-row[data-plan-id="plan-2"] .plan-delete').click();
+  await page.locator(`.plan-row[data-plan-id="${creditPlanId}"] .plan-delete`).click();
   const confirmText = await page.textContent('.plan-confirm');
   assert.ok(confirmText.includes('1'), '應顯示只屬於這個計畫的交易筆數：' + confirmText);
   assert.ok(await page.locator('#plan-confirm-btn').isDisabled(), '名稱還沒打對前不能刪');

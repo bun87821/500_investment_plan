@@ -253,8 +253,13 @@ app.put('/api/portfolio', async (req, res) => {
       if (!(Number(p.budget) > 0)) {
         return res.status(400).json({ error: '計畫的 budget 必須是正數' });
       }
-      if (p.allocations !== undefined && (typeof p.allocations !== 'object' || p.allocations === null || Array.isArray(p.allocations))) {
-        return res.status(400).json({ error: '計畫的 allocations 必須是物件' });
+      if (p.allocations !== undefined) {
+        if (typeof p.allocations !== 'object' || p.allocations === null || Array.isArray(p.allocations)) {
+          return res.status(400).json({ error: '計畫的 allocations 必須是物件' });
+        }
+        if (Object.values(p.allocations).some((v) => typeof v !== 'number' || !Number.isFinite(v))) {
+          return res.status(400).json({ error: '計畫的 allocations 必須是「標的 id → 數字」' });
+        }
       }
       if (seen.has(p.id)) {
         return res.status(400).json({ error: '計畫 id 不得重複' });
@@ -421,17 +426,7 @@ async function createSnapshotsForDoc(doc, source = 'manual') {
   });
 }
 
-// 同一天同一個計畫只留一筆
-function upsertSnapshots(doc, snapshots) {
-  const replaced = new Set(snapshots.map((s) => s.date + '|' + s.planId));
-  const kept = (Array.isArray(doc.snapshots) ? doc.snapshots : []).filter(
-    (s) => !replaced.has(s.date + '|' + s.planId)
-  );
-  return {
-    ...doc,
-    snapshots: [...kept, ...snapshots].sort((a, b) => String(a.date).localeCompare(String(b.date))),
-  };
-}
+
 
 async function recordSnapshotForUser(userId, source = 'manual') {
   // 帶樂觀鎖的讀-改-寫；撞到其他寫入就重讀重試一次
@@ -440,7 +435,7 @@ async function recordSnapshotForUser(userId, source = 'manual') {
     const doc = PortfolioMath.migratePortfolio(raw);
     const snapshots = await createSnapshotsForDoc(doc, source);
     try {
-      const newRev = await writeDoc(userId, upsertSnapshots(doc, snapshots), rev);
+      const newRev = await writeDoc(userId, { ...doc, snapshots: PortfolioMath.upsertSnapshots(doc.snapshots, snapshots) }, rev);
       return { snapshots, rev: newRev };
     } catch (err) {
       if (!(err instanceof ConflictError) || attempt === 1) throw err;

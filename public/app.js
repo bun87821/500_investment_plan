@@ -1,7 +1,5 @@
 'use strict';
 
-const DEFAULT_BUDGET = 5_000_000;
-
 const DEFAULT_STOCKS = [
   { id: '2330', name: '台積電', symbol: '2330.TW', market: '台股', currency: 'TWD', category: '晶圓代工', percent: 25 },
   { id: 'TSM', name: 'TSM ADR', symbol: 'TSM', market: '美股', currency: 'USD', category: '晶圓代工', percent: 25 },
@@ -55,6 +53,7 @@ const BASIS = {
 
 // 共用計算（平均成本重放等）住在 portfolio-math.js，前後端共用同一份實作
 const fxSymbolOf = PortfolioMath.fxSymbolOf;
+const DEFAULT_BUDGET = PortfolioMath.DEFAULT_BUDGET;
 
 const state = {
   plans: [], // 具名投資規劃 { id, name, budget, allocations }；載入時由遷移保證至少有一個
@@ -75,6 +74,7 @@ const state = {
 
 // 各使用者在瀏覽器端的備份各自存一份；訪客（未登入）模式的正式儲存位置就是這裡
 const backupKey = () => 'portfolio-backup:' + (state.user?.sub || 'local');
+const newTxId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 // 目前計畫記在瀏覽器，依使用者分開
 const activePlanKey = () => 'active-plan:' + (state.user?.sub || 'local');
 
@@ -393,7 +393,18 @@ function fxRate(currency) {
 
 // 平均成本重放的實作在 portfolio-math.js；這裡只把 state 轉接成純函式參數
 function computeStock(stock) {
-  return PortfolioMath.computeStock(stock, planTxs(), state.quotes, planBudget());
+  return computeStockFor(activePlan(), stock);
+}
+
+// 指定計畫視角下的重放（快照要對每個計畫各算一次）
+function computeStockFor(plan, stock) {
+  const withPercent = { ...stock, percent: Number(plan?.allocations?.[stock.id]) || 0 };
+  return PortfolioMath.computeStock(
+    withPercent,
+    PortfolioMath.transactionsInPlan(state.transactions, plan?.id),
+    state.quotes,
+    plan?.budget || DEFAULT_BUDGET
+  );
 }
 
 function sortedByTargetPercent(items, stockOf = (x) => x) {
@@ -419,7 +430,7 @@ function todayTaipei() {
 // ---------- 計畫分頁 ----------
 
 function renderPlanTabs() {
-  if (!editingTxId) renderTxPlans(null);
+  syncTxPlansOptions();
   const list = $('plan-tab-list');
   list.innerHTML = '';
   for (const p of state.plans) {
@@ -437,6 +448,7 @@ async function switchPlan(planId) {
   if (planId === activePlan()?.id) return;
   selectPlan(planId);
   closePlanCard();
+  if (!editingTxId) renderTxPlans(null);
   render();
   await loadHistory();
 }
@@ -526,14 +538,10 @@ async function deletePlan(planId) {
   await loadHistory();
 }
 
-// 計畫識別碼不隨名稱改變，取現有序號的最大值 +1。
-// 刪除計畫時會一併清掉指向它的交易與快照，因此序號回收不會對到殘留的資料。
+// 計畫識別碼不隨名稱改變，且不重複使用——刪掉的計畫留下的舊 id
+//（其他裝置的 localStorage、舊備份檔）不會意外對到新建的計畫
 function newPlanId() {
-  const max = state.plans.reduce((m, p) => {
-    const n = Number(String(p.id).replace(/^plan-/, ''));
-    return Number.isFinite(n) ? Math.max(m, n) : m;
-  }, 0);
-  return 'plan-' + (max + 1);
+  return 'plan-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
 
 function initPlans() {
@@ -619,9 +627,7 @@ function initPlans() {
     if (source && $('plan-copy-txs').checked) {
       // 獨立副本：之後在新分頁改動或刪除都不影響來源計畫
       state.transactions.push(
-        ...PortfolioMath.copyTransactionsToPlan(state.transactions, source.id, plan.id, () =>
-          Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
-        )
+        ...PortfolioMath.copyTransactionsToPlan(state.transactions, source.id, plan.id, newTxId)
       );
     }
     selectPlan(plan.id);
@@ -695,7 +701,7 @@ function render() {
     : '尚未取得報價';
 }
 
-function snapshotFromRows(rows, source = 'manual') {
+function snapshotFromRows(rows, source = 'manual', planId = activePlan()?.id ?? null) {
   const totalInvested = rows.reduce((s, r) => s + (r.invested ?? 0), 0);
   const anyValueMissing = rows.some((r) => r.valueTWD == null);
   const totalValue = anyValueMissing ? null : rows.reduce((s, r) => s + r.valueTWD, 0);
@@ -703,7 +709,7 @@ function snapshotFromRows(rows, source = 'manual') {
   const pnlPct = pnl != null && totalInvested > 0 ? pnl / totalInvested : null;
   return {
     date: todayTaipei(),
-    planId: activePlan()?.id ?? null,
+    planId,
     at: Date.now(),
     source,
     totalInvested,
@@ -726,11 +732,8 @@ function snapshotFromRows(rows, source = 'manual') {
   };
 }
 
-// 同一天同一個計畫只留一筆
 function upsertLocalSnapshot(snapshot) {
-  state.snapshots = [...state.snapshots.filter((s) => !(s.date === snapshot.date && s.planId === snapshot.planId)), snapshot].sort((a, b) =>
-    String(a.date).localeCompare(String(b.date))
-  );
+  state.snapshots = PortfolioMath.upsertSnapshots(state.snapshots, [snapshot]);
 }
 
 // ---------- 歷史市值回填 ----------
@@ -1422,6 +1425,7 @@ function updateTxKindUI() {
 // 交易表單的計畫多選：預設勾選目前計畫，編輯既有交易時帶出它原本的歸屬
 function renderTxPlans(selected) {
   const wrap = $('tx-plans');
+  txPlansSignature = state.plans.map((p) => p.id + ':' + p.name).join(',') + '|' + (activePlan()?.id || '');
   const checked = new Set(selected && selected.length ? selected : [activePlan()?.id].filter(Boolean));
   wrap.innerHTML = '';
   for (const p of state.plans) {
@@ -1437,6 +1441,17 @@ function renderTxPlans(selected) {
 
 function selectedTxPlans() {
   return [...document.querySelectorAll('#tx-plans input:checked')].map((el) => el.value);
+}
+
+// 計畫清單或目前計畫變了才重建勾選框，並保留使用者已勾的選擇——
+// 否則每次 render（更新報價、切圖表範圍…）都會把勾好的計畫沖掉。
+let txPlansSignature = '';
+function syncTxPlansOptions() {
+  const signature = state.plans.map((p) => p.id + ':' + p.name).join(',') + '|' + (activePlan()?.id || '');
+  if (signature === txPlansSignature) return;
+  txPlansSignature = signature;
+  const kept = selectedTxPlans().filter((id) => state.plans.some((p) => p.id === id));
+  renderTxPlans(kept);
 }
 
 function updateTxPlansHint() {
@@ -1571,7 +1586,7 @@ async function importCsv(text) {
   if (!confirm(msg)) return;
 
   for (const rec of imported) {
-    state.transactions.push({ ...rec, plans: [activePlan().id], id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6) });
+    state.transactions.push({ ...rec, plans: [activePlan().id], id: newTxId() });
   }
   await savePortfolio();
   render();
@@ -1942,7 +1957,7 @@ function initForm() {
       const idx = state.transactions.findIndex((t) => t.id === editingTxId);
       if (idx >= 0) state.transactions[idx] = { ...state.transactions[idx], ...record, plans, id: editingTxId };
     } else {
-      state.transactions.push({ ...record, plans, id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6) });
+      state.transactions.push({ ...record, plans, id: newTxId() });
     }
     await savePortfolio();
     resetTxForm();
@@ -2000,9 +2015,10 @@ function initForm() {
     try {
       if (isGuest()) {
         await loadQuotes();
-        const rows = sortedByTargetPercent(planStocks().map(computeStock), (r) => r.stock);
-        const snapshot = snapshotFromRows(rows, 'manual');
-        upsertLocalSnapshot(snapshot);
+        for (const plan of state.plans) {
+          const rows = state.stocks.map((stock) => computeStockFor(plan, stock));
+          upsertLocalSnapshot(snapshotFromRows(rows, 'manual', plan.id));
+        }
         await savePortfolio({ includeSnapshots: true });
       } else {
         const res = await fetch('/api/snapshots/today', { method: 'POST' });

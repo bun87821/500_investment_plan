@@ -231,6 +231,8 @@ test('PUT 驗證：plans 與交易歸屬', async (t) => {
     { transactions: [], plans: [{ id: 'p1', name: '預算為零', budget: 0 }] },
     { transactions: [], plans: [{ id: 'p1', name: 'A', budget: 1 }, { id: 'p1', name: 'B', budget: 1 }] },
     { transactions: [], plans: [{ id: 'p1', name: 'A', budget: 1, allocations: 'x' }] },
+    { transactions: [], plans: [{ id: 'p1', name: 'A', budget: 1, allocations: ['x'] }] },
+    { transactions: [], plans: [{ id: 'p1', name: 'A', budget: 1, allocations: { '2330': 'abc' } }] },
     { transactions: [{ id: 't1', plans: 'x' }] },
     { transactions: [{ id: 't1', plans: [] }] },
     { transactions: [{ id: 't1', plans: [1] }] },
