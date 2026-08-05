@@ -52,7 +52,7 @@
       <button id="plan-manage-btn" class="plan-tab-gear" title="管理計畫" aria-label="管理計畫">⚙</button>
     </nav>
 
-    <section class="card" id="plan-card" hidden>
+    <section class="card" id="plan-card" data-collapsible hidden>
       <h2>管理計畫</h2>
       <div class="plan-rows" id="plan-rows"></div>
       <form id="plan-form" class="plan-form">
@@ -108,10 +108,10 @@
       </div>
     </section>
 
-    <section class="card progress-card" id="overall-progress-card">
+    <section class="card progress-card" id="overall-progress-card" data-collapsible data-collapse-title="資金投入進度">
       <div class="overall-progress">
         <div class="overall-progress-head">
-          <span>資金投入進度</span>
+          <span>目前進度</span>
           <span id="overall-progress-label">—</span>
         </div>
         <div class="bar-track bar-track-lg">
@@ -120,7 +120,7 @@
       </div>
     </section>
 
-    <section class="card snapshot-card">
+    <section class="card snapshot-card" id="snapshot-card" data-collapsible>
       <div class="card-head">
         <div>
           <h2>每日市值與損益</h2>
@@ -141,7 +141,7 @@
       <div class="snapshot-chart" id="snapshot-chart"></div>
     </section>
 
-    <section class="card allocation-card" id="allocation-card">
+    <section class="card allocation-card" id="allocation-card" data-collapsible>
       <div class="card-head">
         <h2>資產類別配置</h2>
         <div class="chart-actions">
@@ -150,7 +150,6 @@
             <button type="button" data-basis="invested">投入成本</button>
             <button type="button" data-basis="value">目前市值</button>
           </div>
-          <button type="button" id="allocation-toggle" class="btn btn-ghost" aria-expanded="true">收合</button>
         </div>
       </div>
       <div id="allocation-content">
@@ -162,7 +161,7 @@
       </div>
     </section>
 
-    <section class="card" id="editor-card" hidden>
+    <section class="card" id="editor-card" data-collapsible hidden>
       <h2>編輯投資標的</h2>
       <label class="budget-field" id="edit-budget-field">
         總預算（台幣）
@@ -195,7 +194,7 @@
       <p class="hint">新增標的時可先輸入名稱再按「查」搜尋 Yahoo 代號；選取結果會自動帶入名稱、市場與幣別。可先自由輸入想要的比例，再按「補齊 100%」讓未手動調整的標的依原比例吸收差額。已有交易紀錄的標的須先刪除其交易才能移除。</p>
     </section>
 
-    <section class="card holdings-card">
+    <section class="card holdings-card" data-collapsible>
       <h2>持股配置與進度</h2>
       <div class="table-wrap">
         <table class="holdings" id="holdings-table">
@@ -219,7 +218,7 @@
       <p class="hint">※ SK hynix 未在台/美上市，以韓國原股 000660.KS 報價（可透過複委託買入）。美股、韓股金額以即時匯率換算為台幣。</p>
     </section>
 
-    <section class="card" id="rebalance-card">
+    <section class="card" id="rebalance-card" data-collapsible>
       <div class="card-head">
         <div>
           <h2>再平衡建議</h2>
@@ -247,7 +246,7 @@
       <p class="hint">「依總預算」適合還在分批投入時（把剩餘資金投向落後最多的標的）；「依目前市值」是不加錢的純再平衡（會出現減碼建議）。偏離小於基準的 1% 視為已平衡。建議僅供參考，未計入手續費與稅。</p>
     </section>
 
-    <section class="card" id="monthly-card" hidden>
+    <section class="card" id="monthly-card" data-collapsible hidden>
       <h2>月報</h2>
       <p class="section-subtitle">每月投入、配息、損益與月報酬率（TWR），並與 0050 當月漲跌對比；點列展開每日損益</p>
       <div class="table-wrap">
@@ -269,7 +268,7 @@
     </section>
 
     <section class="grid-2">
-      <div class="card tx-entry-card">
+      <div class="card tx-entry-card" data-collapsible>
         <h2 id="tx-form-title">新增交易</h2>
         <form id="tx-form" class="tx-form">
           <label>
@@ -315,7 +314,7 @@
         </form>
         <p class="hint">股票股利可用「買賣」記一筆價格 0 的買入。</p>
       </div>
-      <div class="card tx-history-card">
+      <div class="card tx-history-card" data-collapsible>
         <div class="card-head">
           <h2>交易紀錄</h2>
           <button type="button" id="csv-btn" class="btn btn-ghost">匯入 CSV</button>

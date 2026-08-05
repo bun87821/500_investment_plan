@@ -181,6 +181,16 @@ h1 {
   margin-bottom: 12px;
 }
 .card-head h2 { margin-bottom: 0; }
+.card.is-collapsed .card-head { margin-bottom: 0; }
+.collapsible-body {
+  display: block;
+}
+.section-collapse-toggle {
+  flex: 0 0 auto;
+  min-width: 64px;
+  margin-left: auto;
+  touch-action: manipulation;
+}
 .chart-actions {
   display: flex;
   align-items: center;

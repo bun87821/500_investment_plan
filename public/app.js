@@ -56,7 +56,6 @@ function categoryColorMap() {
 // 圓餅圖佔比基準
 let chartBasis = null; // 'target' | 'invested' | 'value'
 let basisLocked = false; // 使用者手動點選後鎖定，不再自動挑選
-let allocationCollapsed = localStorage.getItem('allocation-collapsed') === '1';
 const BASIS = {
   target: { label: '目標配置', valueOf: (r) => Number(r.stock.percent) || 0, fmtVal: (v) => fmtNum(v, 1) + '%' },
   invested: { label: '投入成本', valueOf: (r) => r.invested ?? 0, fmtVal: (v) => fmtTWD(v) },
@@ -103,6 +102,73 @@ const planStocks = () => state.stocks.map((s) => ({ ...s, percent: planPercentOf
 const isGuest = () => state.authEnabled && !state.user;
 
 const $ = (id) => document.getElementById(id);
+
+function collapseKeyForCard(card, index) {
+  if (card.dataset.collapseKey) return card.dataset.collapseKey;
+  if (card.id) return card.id;
+  const stableClass = [...card.classList].find((name) => name !== 'card');
+  return stableClass || `section-${index + 1}`;
+}
+
+function isCardCollapsed(key) {
+  const stored = localStorage.getItem(`section-collapsed:${key}`);
+  if (stored != null) return stored === '1';
+  return key === 'allocation-card' && localStorage.getItem('allocation-collapsed') === '1';
+}
+
+function setCardCollapsed(card, collapsed) {
+  const body = card.querySelector(':scope > .collapsible-body');
+  const toggle = card.querySelector(':scope > .card-head .section-collapse-toggle');
+  if (!body || !toggle) return;
+
+  body.hidden = collapsed;
+  card.classList.toggle('is-collapsed', collapsed);
+  toggle.textContent = collapsed ? '展開' : '收合';
+  toggle.setAttribute('aria-expanded', String(!collapsed));
+  toggle.setAttribute('aria-label', `${collapsed ? '展開' : '收合'}${card.dataset.collapseTitle || '區塊'}`);
+}
+
+function ensureCardHeader(card) {
+  const first = card.firstElementChild;
+  if (first?.classList.contains('card-head')) return first;
+
+  const head = document.createElement('div');
+  head.className = 'card-head';
+  const title = first?.tagName === 'H2' ? first : document.createElement('h2');
+  if (title !== first) title.textContent = card.dataset.collapseTitle || '區塊';
+  card.insertBefore(head, first);
+  head.appendChild(title);
+  return head;
+}
+
+function initCollapsibleSections() {
+  document.querySelectorAll('#app-main .card[data-collapsible]').forEach((card, index) => {
+    if (card.dataset.collapseReady === '1') return;
+
+    const key = collapseKeyForCard(card, index);
+    const head = ensureCardHeader(card);
+    const body = document.createElement('div');
+    body.className = 'collapsible-body';
+    body.id = `collapsible-body-${key}`;
+    while (head.nextSibling) body.appendChild(head.nextSibling);
+    card.appendChild(body);
+
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'btn btn-ghost section-collapse-toggle';
+    toggle.setAttribute('aria-controls', body.id);
+    head.appendChild(toggle);
+
+    toggle.addEventListener('click', () => {
+      const collapsed = !card.classList.contains('is-collapsed');
+      localStorage.setItem(`section-collapsed:${key}`, collapsed ? '1' : '0');
+      setCardCollapsed(card, collapsed);
+    });
+
+    card.dataset.collapseReady = '1';
+    setCardCollapsed(card, isCardCollapsed(key));
+  });
+}
 
 // ---------- 格式化 ----------
 const fmtTWD = (n, digits = 0) =>
@@ -734,7 +800,6 @@ function render() {
     bar.classList.toggle('over', overallProgress > 1);
   }
 
-  renderAllocationCollapsed();
   renderHoldings(holdingRows, totalInvested, totalValue, totalPnl);
   renderRebalance(rows, totalValue);
   renderSnapshotChart(rows);
@@ -1185,15 +1250,6 @@ function renderHoldings(rows, totalInvested, totalValue, totalPnl) {
 }
 
 // ---------- 圓餅圖（甜甜圈）----------
-function renderAllocationCollapsed() {
-  const content = $('allocation-content');
-  const toggle = $('allocation-toggle');
-  if (!content || !toggle) return;
-  content.hidden = allocationCollapsed;
-  toggle.textContent = allocationCollapsed ? '展開' : '收合';
-  toggle.setAttribute('aria-expanded', String(!allocationCollapsed));
-}
-
 function polar(cx, cy, r, angleDeg) {
   const a = ((angleDeg - 90) * Math.PI) / 180; // 0 度指向正上方，順時針遞增
   return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
@@ -2162,12 +2218,6 @@ function initForm() {
     render();
   });
 
-  $('allocation-toggle').addEventListener('click', () => {
-    allocationCollapsed = !allocationCollapsed;
-    localStorage.setItem('allocation-collapsed', allocationCollapsed ? '1' : '0');
-    renderAllocationCollapsed();
-  });
-
   // 深色/淺色切換時重畫圓餅圖以套用對應配色
   if (window.matchMedia) {
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', render);
@@ -2306,6 +2356,7 @@ function watchOnlineStatus() {
 (async function main() {
   registerServiceWorker();
   watchOnlineStatus();
+  initCollapsibleSections();
   initForm();
   initEditor();
   initPlans();
