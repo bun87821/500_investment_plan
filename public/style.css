@@ -961,6 +961,38 @@ tfoot td {
 .monthly-row { cursor: pointer; }
 .monthly-row:hover td { background: rgba(128, 128, 128, 0.08); }
 .monthly-detail-cell { font-size: 0.85rem; opacity: 0.85; padding: 6px 10px 10px; }
+.monthly-daily-table {
+  min-width: 520px;
+  display: grid;
+  gap: 2px;
+}
+.monthly-daily-head,
+.monthly-daily-row {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr 1.2fr;
+  gap: 10px;
+  align-items: center;
+}
+.monthly-daily-head {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--soft-border);
+}
+.monthly-daily-row {
+  padding: 5px 0;
+  border-bottom: 1px solid var(--soft-border);
+  font-variant-numeric: tabular-nums;
+}
+.monthly-daily-row span:not(:first-child),
+.monthly-daily-head span:not(:first-child) {
+  text-align: right;
+}
+.monthly-daily-empty {
+  color: var(--text-muted);
+  padding: 8px 0;
+}
 
 .tx-form-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .tx-form-actions .btn-primary { flex: 1; }

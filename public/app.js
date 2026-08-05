@@ -1446,24 +1446,35 @@ function toggleMonthlyDetail(row, month) {
     return;
   }
   document.querySelectorAll('.monthly-detail').forEach((el) => el.remove());
-  const txs = planTxs()
-    .filter((t) => String(t.date).slice(0, 7) === month)
+  const days = (computeDailySeries() || [])
+    .filter((p) => String(p.date).slice(0, 7) === month)
     .sort((a, b) => String(a.date).localeCompare(String(b.date)));
   const tr = document.createElement('tr');
   tr.className = 'monthly-detail';
-  const items = txs.length
-    ? txs
-        .map((t) => {
-          const stock = state.stocks.find((s) => s.id === t.stockId);
-          const name = stock ? stock.name : t.stockId;
-          if (t.kind === 'split') return `${esc(t.date)} ${esc(name)} 分割 1→${fmtNum(t.ratio, 4)}`;
-          if (t.kind === 'dividend')
-            return `${esc(t.date)} ${esc(name)} 配息 ${t.twdCost != null ? fmtTWD(t.twdCost) : fmtNum(t.amount, 2) + ' ' + esc(stock?.currency || '')}`;
-          return `${esc(t.date)} ${esc(name)} ${t.shares > 0 ? '買' : '賣'} ${fmtNum(Math.abs(t.shares), 4)} 股 @ ${fmtNum(t.price, 4)}`;
-        })
-        .join('<br>')
-    : '本月無交易';
-  tr.innerHTML = `<td colspan="6" class="monthly-detail-cell">${items}</td>`;
+  const items = days
+    .filter((d) => d.dPnl != null)
+    .map(
+      (d) => `
+        <div class="monthly-daily-row">
+          <span>${esc(d.date)}</span>
+          <span class="${pnlClass(d.dPnl)}">${signed(d.dPnl, (n) => fmtTWD(n))}</span>
+          <span class="${pnlClass(d.dPct ?? 0)}">${d.dPct == null ? '—' : signed(d.dPct, (n) => fmtPct(n, 2))}</span>
+          <span>${fmtTWD(d.value)}</span>
+        </div>`
+    )
+    .join('');
+  tr.innerHTML = `
+    <td colspan="6" class="monthly-detail-cell">
+      <div class="monthly-daily-table">
+        <div class="monthly-daily-head">
+          <span>日期</span>
+          <span>當日損益</span>
+          <span>當日報酬率</span>
+          <span>市值</span>
+        </div>
+        ${items || '<div class="monthly-daily-empty">本月每日損益資料不足。</div>'}
+      </div>
+    </td>`;
   row.after(tr);
 }
 
