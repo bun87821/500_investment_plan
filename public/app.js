@@ -1435,15 +1435,18 @@ function renderDonutLegend(ordered, colorMap, catOrder, basis, total) {
   const legend = $('donut-legend');
   let html = '';
   for (const cat of catOrder) {
-    const members = ordered.filter((r) => (r.stock.category || '未分類') === cat);
+    const members = ordered
+      .filter((r) => (r.stock.category || '未分類') === cat)
+      .filter((r) => basis.valueOf(r) > 0);
     const catValue = members.reduce((s, r) => s + basis.valueOf(r), 0);
+    if (catValue <= 0) continue;
     const catPct = total > 0 ? catValue / total : 0;
     const legendValue = chartBasis === 'target' ? fmtTWD(((planBudget() ?? 0) * catValue) / 100) : basis.fmtVal(catValue);
     const memberHtml = members
       .map((r) => {
         const v = basis.valueOf(r);
         const p = total > 0 ? v / total : 0;
-        return `<span class="legend-member${v <= 0 ? ' zero' : ''}"><span>${esc(r.stock.name)}</span><span>${fmtPct(p)}</span></span>`;
+        return `<span class="legend-member"><span>${esc(r.stock.name)}</span><span>${fmtPct(p)}</span></span>`;
       })
       .join('');
     html += `

@@ -83,3 +83,9 @@ test('登入狀態要固定在主網域，且使用中要延長 session', () => 
   assert.match(serverJs, /setSessionCookie\(res, user\)/);
   assert.match(serverJs, /app\.get\('\/api\/me', async \(req, res\) => \{/);
 });
+
+test('資產類別配置圖例不顯示目前基準為 0 的標的與類別', () => {
+  assert.match(appJs, /const members = ordered\s*\.filter\(\(r\) => \(r\.stock\.category \|\| '未分類'\) === cat\)\s*\.filter\(\(r\) => basis\.valueOf\(r\) > 0\)/);
+  assert.match(appJs, /if \(catValue <= 0\) continue/);
+  assert.doesNotMatch(appJs, /legend-member\$\{v <= 0 \? ' zero' : ''\}/);
+});
