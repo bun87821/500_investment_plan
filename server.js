@@ -83,8 +83,10 @@ app.get('/api/config', (req, res) => {
   res.json({ authEnabled: AUTH_ENABLED, googleClientId: GOOGLE_CLIENT_ID });
 });
 
-app.get('/api/me', (req, res) => {
-  res.json({ user: AUTH_ENABLED ? getUser(req) : null });
+app.get('/api/me', async (req, res) => {
+  const user = AUTH_ENABLED ? getUser(req) : null;
+  if (user) await rememberUserProfileBestEffort(user);
+  res.json({ user });
 });
 
 app.post('/api/auth/google', async (req, res) => {
@@ -92,6 +94,7 @@ app.post('/api/auth/google', async (req, res) => {
   try {
     const p = await verifyGoogleCredential(req.body?.credential);
     const user = { sub: p.sub, email: p.email || '', name: p.name || p.email || '使用者', picture: p.picture || '' };
+    await rememberUserProfileBestEffort(user);
     res.cookie('session', signSession(user), {
       httpOnly: true,
       sameSite: 'lax',
@@ -119,6 +122,15 @@ class ConflictError extends Error {}
 let readDoc;
 let writeDoc;
 let listUserIds;
+let rememberUserProfile = async () => {};
+
+async function rememberUserProfileBestEffort(user) {
+  try {
+    await rememberUserProfile(user);
+  } catch (err) {
+    console.error('記錄登入使用者失敗：', err.message);
+  }
+}
 
 if (process.env.DATABASE_URL) {
   const { Pool } = require('pg');
@@ -134,6 +146,15 @@ if (process.env.DATABASE_URL) {
       'CREATE TABLE IF NOT EXISTS portfolios (user_id TEXT PRIMARY KEY, data JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())'
     );
     await pool.query('ALTER TABLE portfolios ADD COLUMN IF NOT EXISTS rev BIGINT NOT NULL DEFAULT 0');
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS portfolio_users (
+        user_id TEXT PRIMARY KEY,
+        email TEXT NOT NULL DEFAULT '',
+        name TEXT NOT NULL DEFAULT '',
+        first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`
+    );
     // 從舊版單列 portfolio 資料表搬移既有資料到 'legacy'（只在第一次執行時發生）
     try {
       await pool.query(
@@ -168,6 +189,19 @@ if (process.env.DATABASE_URL) {
     await ready;
     const r = await pool.query('SELECT user_id FROM portfolios');
     return r.rows.map((row) => row.user_id);
+  };
+  rememberUserProfile = async (user) => {
+    if (!AUTH_ENABLED || !user?.sub) return;
+    await ready;
+    await pool.query(
+      `INSERT INTO portfolio_users (user_id, email, name)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (user_id) DO UPDATE SET
+         email = EXCLUDED.email,
+         name = EXCLUDED.name,
+         last_seen_at = now()`,
+      [user.sub, user.email || '', user.name || user.email || '']
+    );
   };
 } else {
   const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
@@ -217,6 +251,7 @@ app.get('/api/portfolio', async (req, res) => {
   const user = requireUser(req, res);
   if (!user) return;
   try {
+    await rememberUserProfileBestEffort(user);
     const { doc, rev } = await readDoc(user.sub);
     res.json({ ...doc, rev });
   } catch (err) {
@@ -228,6 +263,7 @@ app.get('/api/portfolio', async (req, res) => {
 app.put('/api/portfolio', async (req, res) => {
   const user = requireUser(req, res);
   if (!user) return;
+  await rememberUserProfileBestEffort(user);
   const body = req.body;
   if (!body || !Array.isArray(body.transactions)) {
     return res.status(400).json({ error: 'transactions 必須是陣列' });

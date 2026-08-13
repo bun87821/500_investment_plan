@@ -6,6 +6,7 @@ const path = require('node:path');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
 const appJs = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+const serverJs = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 
 test('主要卡片區塊標記為可收合', () => {
   for (const id of [
@@ -46,4 +47,18 @@ test('登入與儲存狀態要清楚，編輯標的不得靜默丟失', () => {
   assert.match(appJs, /state\.transactions = prevTransactions/);
   assert.match(appJs, /state\.stocks = prevStocks/);
   assert.match(appJs, /resetTxForm\(\)/);
+});
+
+test('Google 登入帳號需另外記錄，不能只靠 portfolios 判斷使用者數', () => {
+  assert.match(serverJs, /CREATE TABLE IF NOT EXISTS portfolio_users/);
+  assert.match(serverJs, /user_id TEXT PRIMARY KEY/);
+  assert.match(serverJs, /email TEXT NOT NULL DEFAULT ''/);
+  assert.match(serverJs, /name TEXT NOT NULL DEFAULT ''/);
+  assert.match(serverJs, /last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now\(\)/);
+  assert.match(serverJs, /let rememberUserProfile = async \(\) => \{\}/);
+  assert.match(serverJs, /rememberUserProfile = async \(user\) => \{/);
+  assert.match(serverJs, /INSERT INTO portfolio_users \(user_id, email, name\)/);
+  assert.match(serverJs, /ON CONFLICT \(user_id\) DO UPDATE/);
+  assert.match(serverJs, /last_seen_at = now\(\)/);
+  assert.match(serverJs, /await rememberUserProfile\(user\)/);
 });
