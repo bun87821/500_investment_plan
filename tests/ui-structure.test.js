@@ -62,3 +62,14 @@ test('Google 登入帳號需另外記錄，不能只靠 portfolios 判斷使用�
   assert.match(serverJs, /last_seen_at = now\(\)/);
   assert.match(serverJs, /await rememberUserProfile\(user\)/);
 });
+
+test('刪除計畫必須等雲端儲存成功，失敗時回復畫面狀態', () => {
+  assert.match(appJs, /const beforeDelete = \{/);
+  assert.match(appJs, /const saved = await savePortfolio\(\)/);
+  assert.match(appJs, /if \(!saved\) \{/);
+  assert.match(appJs, /state\.plans = beforeDelete\.plans/);
+  assert.match(appJs, /state\.transactions = beforeDelete\.transactions/);
+  assert.match(appJs, /state\.snapshots = beforeDelete\.snapshots/);
+  assert.match(appJs, /deletingPlanId = planId/);
+  assert.match(appJs, /return/);
+});

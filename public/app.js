@@ -665,6 +665,12 @@ function closePlanCard() {
 }
 
 async function deletePlan(planId) {
+  const beforeDelete = {
+    plans: state.plans,
+    transactions: state.transactions,
+    snapshots: state.snapshots,
+    activePlanId: state.activePlanId,
+  };
   const doc = PortfolioMath.removePlan(
     { plans: state.plans, transactions: state.transactions, snapshots: state.snapshots },
     planId
@@ -673,8 +679,22 @@ async function deletePlan(planId) {
   state.transactions = doc.transactions;
   state.snapshots = doc.snapshots;
   selectPlan(state.activePlanId); // 刪掉的是目前計畫 → 退回第一個
+  const saved = await savePortfolio();
+  if (!saved) {
+    const conflictReloadedPlan = state.plans.some((p) => p.id === planId);
+    if (!conflictReloadedPlan) {
+      state.plans = beforeDelete.plans;
+      state.transactions = beforeDelete.transactions;
+      state.snapshots = beforeDelete.snapshots;
+      selectPlan(beforeDelete.activePlanId);
+    }
+    deletingPlanId = planId;
+    $('plan-card').hidden = false;
+    render();
+    renderPlanRows();
+    return;
+  }
   closePlanCard();
-  await savePortfolio();
   render();
   await loadHistory();
 }
