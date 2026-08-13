@@ -14,12 +14,20 @@ const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const AUTH_ENABLED = !!GOOGLE_CLIENT_ID;
 const SESSION_DAYS = 30;
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+const CANONICAL_HOST = process.env.CANONICAL_HOST || '';
 
 if (AUTH_ENABLED && !process.env.SESSION_SECRET) {
   console.warn('警告：未設定 SESSION_SECRET，已隨機產生 — 每次重新部署所有使用者都需重新登入。');
 }
 
 app.set('trust proxy', 1); // Railway 走反向代理，讓 secure cookie 與 req.secure 正確
+app.use((req, res, next) => {
+  if (CANONICAL_HOST && req.hostname !== CANONICAL_HOST) {
+    const target = new URL(`${req.protocol}://${CANONICAL_HOST}${req.originalUrl}`);
+    return res.redirect(308, target.toString());
+  }
+  next();
+});
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -57,6 +65,15 @@ function getUser(req) {
   return m ? verifySession(decodeURIComponent(m[1])) : null;
 }
 
+function setSessionCookie(res, user) {
+  res.cookie('session', signSession(user), {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: 'auto',
+    maxAge: SESSION_DAYS * 86400_000,
+  });
+}
+
 // 單人模式一律以 'legacy' 為 key；多人模式以 Google 帳號的 sub 為 key
 function requireUser(req, res) {
   if (!AUTH_ENABLED) return { sub: 'legacy' };
@@ -85,7 +102,10 @@ app.get('/api/config', (req, res) => {
 
 app.get('/api/me', async (req, res) => {
   const user = AUTH_ENABLED ? getUser(req) : null;
-  if (user) await rememberUserProfileBestEffort(user);
+  if (user) {
+    setSessionCookie(res, user);
+    await rememberUserProfileBestEffort(user);
+  }
   res.json({ user });
 });
 
@@ -95,12 +115,7 @@ app.post('/api/auth/google', async (req, res) => {
     const p = await verifyGoogleCredential(req.body?.credential);
     const user = { sub: p.sub, email: p.email || '', name: p.name || p.email || '使用者', picture: p.picture || '' };
     await rememberUserProfileBestEffort(user);
-    res.cookie('session', signSession(user), {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: 'auto',
-      maxAge: SESSION_DAYS * 86400_000,
-    });
+    setSessionCookie(res, user);
     res.json({ user });
   } catch (err) {
     console.error('Google 登入驗證失敗：', err.message);

@@ -73,3 +73,13 @@ test('刪除計畫必須等雲端儲存成功，失敗時回復畫面狀態', ()
   assert.match(appJs, /deletingPlanId = planId/);
   assert.match(appJs, /return/);
 });
+
+test('登入狀態要固定在主網域，且使用中要延長 session', () => {
+  assert.match(serverJs, /const CANONICAL_HOST = process\.env\.CANONICAL_HOST \|\| ''/);
+  assert.match(serverJs, /function setSessionCookie\(res, user\)/);
+  assert.match(serverJs, /res\.cookie\('session', signSession\(user\)/);
+  assert.match(serverJs, /if \(CANONICAL_HOST && req\.hostname !== CANONICAL_HOST\)/);
+  assert.match(serverJs, /res\.redirect\(308, target\.toString\(\)\)/);
+  assert.match(serverJs, /setSessionCookie\(res, user\)/);
+  assert.match(serverJs, /app\.get\('\/api\/me', async \(req, res\) => \{/);
+});

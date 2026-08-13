@@ -95,6 +95,7 @@ GitHub Actions（`.github/workflows/ci.yml`）會在每次 push / PR 自動跑�
 3. 在 Railway 應用服務的 Variables 加入：
    - `GOOGLE_CLIENT_ID`＝剛拿到的用戶端 ID（`xxxx.apps.googleusercontent.com`）
    - `SESSION_SECRET`＝任意長隨機字串（例如 `openssl rand -hex 32` 的輸出）。不設也能跑，但每次重新部署所有人都要重新登入。
+   - `CANONICAL_HOST`＝主要網址的 host（例如 `500investmentplan-production.up.railway.app`）。Railway 若同時有兩個網址，瀏覽器 cookie 會分開；設定後副網址會自動導回主要網址，避免看起來被登出。
 4. 重新部署後，頁面上方會出現「使用 Google 登入」。
 
 啟用登入前既有的共用資料仍保留在資料庫的 `legacy` 列；原本使用該瀏覽器的人登入後，瀏覽器備份會自動同步到他的帳號。
