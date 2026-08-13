@@ -123,6 +123,24 @@ h1 {
 .btn-primary:hover { filter: brightness(1.08); }
 .btn-ghost { background: transparent; }
 
+.sync-status {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+.sync-status.saved { color: var(--series-2); }
+.sync-status.guest,
+.sync-status.local,
+.sync-status.conflict {
+  color: var(--warn-ink);
+  background: var(--warn-bg);
+  border-color: color-mix(in srgb, var(--warn-ink) 20%, transparent);
+}
+
 .notice {
   background: var(--warn-bg);
   color: var(--warn-ink);

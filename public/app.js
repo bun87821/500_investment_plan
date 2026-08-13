@@ -194,6 +194,21 @@ const parseDecimalInput = (value) => {
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+function setSyncStatus(kind, detail = '') {
+  const el = $('sync-status');
+  if (!el) return;
+  const labels = {
+    loading: '同步狀態確認中',
+    guest: '訪客本機',
+    saving: '儲存中',
+    saved: 'Google 雲端已儲存',
+    local: '暫存在本機',
+    conflict: '已載入雲端新版',
+  };
+  el.textContent = detail || labels[kind] || '';
+  el.className = `sync-status ${kind || ''}`;
+}
+
 const tickerOf = (symbol) => String(symbol).split('.')[0];
 const quoteUrlOf = (symbol) => {
   const s = encodeURIComponent(String(symbol || '').trim());
@@ -270,12 +285,18 @@ async function loadPortfolio() {
     // 訪客模式：直接從瀏覽器讀（也相容啟用登入前的舊 key）
     tryApplyBackup(backupKey()) || tryApplyBackup('portfolio-backup');
     ensurePlans();
+    setSyncStatus('guest', '訪客本機：這台裝置限定');
     return;
   }
   try {
+    setSyncStatus('loading');
     const res = await fetch('/api/portfolio');
-    if (res.ok) applyDoc(await res.json());
+    if (res.ok) {
+      applyDoc(await res.json());
+      setSyncStatus('saved', state.user ? `Google 雲端：${state.user.email || state.user.name || '已登入'}` : '伺服器已載入');
+    }
   } catch {
+    setSyncStatus('local', '讀取雲端失敗：暫存在本機');
     /* 保持預設值 */
   }
   // 伺服器是空的但瀏覽器有備份 → 還原。依序找：這個帳號的備份、訪客模式的資料
@@ -284,7 +305,7 @@ async function loadPortfolio() {
     const restored =
       tryApplyBackup(backupKey()) || tryApplyBackup('portfolio-backup:local') || tryApplyBackup('portfolio-backup');
     if (restored) {
-      savePortfolio({ includeSnapshots: true });
+      await savePortfolio({ includeSnapshots: true });
       showNotice('已將瀏覽器中的紀錄同步到你的帳號。');
     }
   }
@@ -308,8 +329,12 @@ async function savePortfolio({ includeSnapshots = false } = {}) {
   };
   if (includeSnapshots || isGuest()) payload.snapshots = state.snapshots;
   localStorage.setItem(backupKey(), JSON.stringify(backup));
-  if (isGuest()) return; // 訪客模式只存瀏覽器
+  if (isGuest()) {
+    setSyncStatus('guest', '訪客本機：這台裝置限定');
+    return true; // 訪客模式只存瀏覽器
+  }
   try {
+    setSyncStatus('saving');
     const res = await fetch('/api/portfolio', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -317,7 +342,8 @@ async function savePortfolio({ includeSnapshots = false } = {}) {
     });
     if (res.status === 401) {
       showNotice('登入已過期，資料暫存在瀏覽器中 — 請重新整理頁面登入後再操作一次。');
-      return;
+      setSyncStatus('local', '登入過期：暫存在本機');
+      return false;
     }
     if (res.status === 409) {
       // 其他裝置改過資料：改用伺服器最新版，提醒使用者重做這次操作
@@ -328,13 +354,18 @@ async function savePortfolio({ includeSnapshots = false } = {}) {
         render();
       }
       showNotice('資料已在其他裝置更新，畫面已載入最新版本 — 請確認後再操作一次。');
-      return;
+      setSyncStatus('conflict');
+      return false;
     }
     if (!res.ok) throw new Error();
     const data = await res.json();
     if (data.rev !== undefined) state.rev = Number(data.rev) || state.rev;
+    setSyncStatus('saved', state.user ? `Google 雲端已儲存：${state.user.email || state.user.name || '已登入'}` : '伺服器已儲存');
+    return true;
   } catch {
     showNotice('儲存到伺服器失敗，資料暫存在瀏覽器中，請稍後重試或匯出備份。');
+    setSyncStatus('local', '儲存失敗：暫存在本機');
+    return false;
   }
 }
 
@@ -1983,7 +2014,7 @@ function closeEditor() {
   $('edit-stocks-btn').hidden = false;
 }
 
-function saveEditor() {
+async function saveEditor() {
   // 純記錄型計畫沒有總預算欄，只有有目標的計畫才驗證它
   const budget = parseDecimalInput($('edit-budget').value);
   if (hasTarget() && !(budget > 0)) {
@@ -2023,6 +2054,8 @@ function saveEditor() {
     return;
   }
 
+  const prevStocks = state.stocks;
+  const prevPlans = state.plans.map((p) => ({ ...p, allocations: { ...(p.allocations || {}) } }));
   const plan = activePlan();
   if (hasTarget()) {
     const total = stocks.reduce((s, x) => s + x.percent, 0);
@@ -2034,7 +2067,12 @@ function saveEditor() {
     for (const s of stocks) if (s.percent > 0) plan.allocations[s.id] = s.percent;
   }
   state.stocks = sortedByTargetPercent(stocks).map(({ percent, ...rest }) => rest);
-  savePortfolio();
+  const saved = await savePortfolio();
+  if (!saved) {
+    state.stocks = prevStocks;
+    state.plans = prevPlans;
+    return;
+  }
   rebuildStockSelect();
   closeEditor();
   render();
@@ -2117,13 +2155,18 @@ function initForm() {
       alert('請至少勾選一個計畫');
       return;
     }
+    const prevTransactions = state.transactions;
     if (editingTxId) {
       const idx = state.transactions.findIndex((t) => t.id === editingTxId);
-      if (idx >= 0) state.transactions[idx] = { ...state.transactions[idx], ...record, plans, id: editingTxId };
+      if (idx >= 0) state.transactions = state.transactions.map((t, i) => (i === idx ? { ...t, ...record, plans, id: editingTxId } : t));
     } else {
-      state.transactions.push({ ...record, plans, id: newTxId() });
+      state.transactions = [...state.transactions, { ...record, plans, id: newTxId() }];
     }
-    await savePortfolio();
+    const saved = await savePortfolio();
+    if (!saved) {
+      state.transactions = prevTransactions;
+      return;
+    }
     resetTxForm();
     render();
     loadHistory(); // 交易變動可能引入新標的或改變回推結果

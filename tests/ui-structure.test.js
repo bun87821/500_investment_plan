@@ -34,3 +34,16 @@ test('配息提醒提供一鍵忽略，且不會忽略分割提醒', () => {
   assert.match(appJs, /filter\(\(a\) => a\.type === 'div'\)/);
   assert.doesNotMatch(appJs, /filter\(\(a\) => a\.type !== 'split'\)/);
 });
+
+test('登入與儲存狀態要清楚，編輯標的不得靜默丟失', () => {
+  assert.match(html, /id="sync-status"/, 'header 需要有同步狀態提示');
+  assert.match(appJs, /function setSyncStatus\(/);
+  assert.match(appJs, /Google 雲端/);
+  assert.match(appJs, /訪客本機/);
+  assert.match(appJs, /async function saveEditor\(/);
+  assert.match(appJs, /const saved = await savePortfolio\(\)/);
+  assert.match(appJs, /if \(!saved\) \{/);
+  assert.match(appJs, /state\.transactions = prevTransactions/);
+  assert.match(appJs, /state\.stocks = prevStocks/);
+  assert.match(appJs, /resetTxForm\(\)/);
+});
