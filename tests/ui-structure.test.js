@@ -49,6 +49,13 @@ test('登入與儲存狀態要清楚，編輯標的不得靜默丟失', () => {
   assert.match(appJs, /resetTxForm\(\)/);
 });
 
+test('頁首提供重整整個頁面的按鈕', () => {
+  assert.match(html, /id="page-reload-btn"/);
+  assert.match(html, />重整頁面<\/button>/);
+  assert.match(appJs, /\$\('page-reload-btn'\)\.addEventListener\('click', \(\) => \{/);
+  assert.match(appJs, /location\.reload\(\)/);
+});
+
 test('Google 登入帳號需另外記錄，不能只靠 portfolios 判斷使用者數', () => {
   assert.match(serverJs, /CREATE TABLE IF NOT EXISTS portfolio_users/);
   assert.match(serverJs, /user_id TEXT PRIMARY KEY/);

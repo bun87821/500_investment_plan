@@ -2238,6 +2238,10 @@ function initForm() {
     btn.textContent = '↻ 更新報價';
   });
 
+  $('page-reload-btn').addEventListener('click', () => {
+    location.reload();
+  });
+
   $('snapshot-btn').addEventListener('click', async () => {
     const btn = $('snapshot-btn');
     btn.disabled = true;
