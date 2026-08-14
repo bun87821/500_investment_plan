@@ -6,6 +6,7 @@ const path = require('node:path');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
 const appJs = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'style.css'), 'utf8');
 const serverJs = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 
 test('主要卡片區塊標記為可收合', () => {
@@ -54,6 +55,13 @@ test('頁首提供重整整個頁面的按鈕', () => {
   assert.match(html, />重整頁面<\/button>/);
   assert.match(appJs, /\$\('page-reload-btn'\)\.addEventListener\('click', \(\) => \{/);
   assert.match(appJs, /location\.reload\(\)/);
+});
+
+test('手機版管理計畫列讓名稱欄維持足夠寬度', () => {
+  assert.match(css, /@media \(max-width: 720px\)[\s\S]*\.plan-row\s*\{[\s\S]*display: grid/);
+  assert.match(css, /@media \(max-width: 720px\)[\s\S]*\.plan-row\s*\{[\s\S]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
+  assert.match(css, /@media \(max-width: 720px\)[\s\S]*\.plan-row-name,\s*\.plan-row-budget\s*\{[\s\S]*width: 100%/);
+  assert.match(css, /@media \(max-width: 720px\)[\s\S]*\.plan-row \.plan-delete\s*\{[\s\S]*grid-column: 1 \/ -1/);
 });
 
 test('Google 登入帳號需另外記錄，不能只靠 portfolios 判斷使用者數', () => {
