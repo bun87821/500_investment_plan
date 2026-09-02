@@ -305,6 +305,98 @@ test('PUT 驗證：純記錄型計畫的 budget 可省略或為 null', async (t)
   }
 });
 
+test('PUT 只覆寫有帶的欄位：沒帶 snapshots 不會清掉既有快照', async (t) => {
+  const srv = await startServer();
+  t.after(() => srv.stop());
+
+  const put = (body) =>
+    fetch(srv.url + '/api/portfolio', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const get = () => fetch(srv.url + '/api/portfolio').then((r) => r.json());
+
+  await put({
+    rev: 0,
+    plans: [{ id: 'p1', name: '主要計畫', budget: 5_000_000, allocations: { '2330': 100 } }],
+    stocks: [{ id: '2330', name: '台積電', symbol: '2330.TW', currency: 'TWD' }],
+    transactions: [{ id: 't1', stockId: '2330', date: '2026-08-01', shares: 100, price: 1000, plans: ['p1'] }],
+    snapshots: [{ date: '2026-08-01', planId: 'p1', totalValue: 100_000, totalInvested: 100_000, pnl: 0 }],
+    ignoredEvents: ['div:2330.TW:2026-07-01'],
+  });
+  let doc = await get();
+  assert.equal(doc.snapshots.length, 1);
+
+  // 前端「新增一筆交易」的一般儲存路徑不會帶 snapshots — 既有快照必須留著
+  await put({
+    rev: doc.rev,
+    plans: doc.plans,
+    stocks: doc.stocks,
+    transactions: [...doc.transactions, { id: 't2', stockId: '2330', date: '2026-08-20', shares: 50, price: 1100, plans: ['p1'] }],
+    ignoredEvents: doc.ignoredEvents,
+  });
+  doc = await get();
+  assert.equal(doc.snapshots.length, 1, '沒帶 snapshots 的儲存不應清掉快照');
+  assert.equal(doc.transactions.length, 2, '有帶的欄位仍照常覆寫');
+
+  // 連 plans/stocks/ignoredEvents 都沒帶時同樣保留
+  await put({ rev: doc.rev, transactions: doc.transactions });
+  doc = await get();
+  assert.equal(doc.snapshots.length, 1);
+  assert.equal(doc.plans.length, 1);
+  assert.equal(doc.stocks.length, 1);
+  assert.deepEqual(doc.ignoredEvents, ['div:2330.TW:2026-07-01']);
+
+  // 有帶就以帶的為準——清空要送得出去
+  await put({ rev: doc.rev, transactions: doc.transactions, snapshots: [] });
+  doc = await get();
+  assert.equal(doc.snapshots.length, 0, '明確送出空陣列時應真的清空');
+});
+
+test('快照瘦身：不再存 holdings 明細，既有的在下次寫入時剝除', async (t) => {
+  const srv = await startServer();
+  t.after(() => srv.stop());
+
+  // 舊資料帶著肥大的 holdings（前端從未讀取，卻佔快照 96% 體積）
+  await fetch(srv.url + '/api/portfolio', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      transactions: [{ id: 't1', stockId: '2330', date: '2026-01-05', shares: 100, price: 1000, plans: ['p1'] }],
+      plans: [{ id: 'p1', name: '信貸', budget: 1_500_000 }],
+      snapshots: [
+        {
+          date: '2026-08-01',
+          planId: 'p1',
+          totalValue: 100_000,
+          totalInvested: 90_000,
+          pnl: 10_000,
+          pnlPct: 0.111,
+          holdings: [{ id: '2330', name: '台積電', symbol: '2330.TW', currency: 'TWD', shares: 100, price: 1000, fx: 1, invested: 90_000, valueTWD: 100_000, pnl: 10_000 }],
+          quoteErrors: { 'X.TW': 'Yahoo 回應 404' },
+        },
+      ],
+    }),
+  });
+
+  const stored = (await (await fetch(srv.url + '/api/portfolio')).json()).snapshots[0];
+  assert.ok(!('holdings' in stored), 'holdings 應被剝除');
+  assert.ok(!('quoteErrors' in stored), 'quoteErrors 應被剝除');
+  // 圖表真正用到的欄位要完整保留
+  assert.equal(stored.date, '2026-08-01');
+  assert.equal(stored.planId, 'p1');
+  assert.equal(stored.totalValue, 100_000);
+  assert.equal(stored.totalInvested, 90_000);
+  assert.equal(stored.pnl, 10_000);
+
+  // 新產生的快照同樣不含明細，且單筆體積遠小於舊格式
+  await fetch(srv.url + '/api/snapshots/today', { method: 'POST' });
+  const fresh = (await (await fetch(srv.url + '/api/portfolio')).json()).snapshots.at(-1);
+  assert.ok(!('holdings' in fresh));
+  assert.ok(Buffer.byteLength(JSON.stringify(fresh)) < 400, '單筆快照應遠小於 1KB');
+});
+
 test('記錄今日市值：每個計畫各存一筆快照', async (t) => {
   const srv = await startServer();
   t.after(() => srv.stop());

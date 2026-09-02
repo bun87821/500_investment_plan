@@ -117,6 +117,6 @@ GitHub Actions（`.github/workflows/ci.yml`）會在每次 push / PR 自動跑�
 - `POST /api/auth/google` – 以 Google ID token 登入（設定 httpOnly session cookie）
 - `POST /api/auth/logout` – 登出
 - `GET /api/portfolio` – 取得自己的計畫（多人模式需登入）
-- `PUT /api/portfolio` – 覆寫自己的計畫 `{ "budget": 5000000, "stocks": [...], "transactions": [...] }`
+- `PUT /api/portfolio` – 更新自己的帳號資料。只覆寫這次有帶的欄位（`plans`、`stocks`、`transactions`、`snapshots`、`ignoredEvents`），沒帶的沿用既有值；需帶讀取時的 `rev` 做樂觀鎖
 - `GET /api/quotes?symbols=2330.TW,TSM,TWD=X` – 批次報價（60 秒快取）
 - `GET /api/events?symbols=NVDA,2330.TW` – 分割與配息事件（6 小時快取），供分割偵測與未記帳配息提醒使用

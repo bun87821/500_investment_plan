@@ -679,7 +679,8 @@ async function deletePlan(planId) {
   state.transactions = doc.transactions;
   state.snapshots = doc.snapshots;
   selectPlan(state.activePlanId); // 刪掉的是目前計畫 → 退回第一個
-  const saved = await savePortfolio();
+  // 刪計畫會一併移除該計畫的快照；儲存是合併語意，不帶 snapshots 的話伺服器會留下孤兒快照
+  const saved = await savePortfolio({ includeSnapshots: true });
   if (!saved) {
     const conflictReloadedPlan = state.plans.some((p) => p.id === planId);
     if (!conflictReloadedPlan) {
@@ -895,7 +896,8 @@ function snapshotFromRows(rows, source = 'manual', planId = activePlan()?.id ?? 
   const totalValue = anyValueMissing ? null : rows.reduce((s, r) => s + r.valueTWD, 0);
   const pnl = totalValue != null ? totalValue - totalInvested : null;
   const pnlPct = pnl != null && totalInvested > 0 ? pnl / totalInvested : null;
-  return {
+  // 只留圖表會讀的欄位（見 portfolio-math 的 slimSnapshot）；rows 只用來加總
+  return PortfolioMath.slimSnapshot({
     date: todayTaipei(),
     planId,
     at: Date.now(),
@@ -904,20 +906,7 @@ function snapshotFromRows(rows, source = 'manual', planId = activePlan()?.id ?? 
     totalValue,
     pnl,
     pnlPct,
-    holdings: rows.map((r) => ({
-      id: r.stock.id,
-      name: r.stock.name,
-      symbol: r.stock.symbol,
-      currency: r.stock.currency,
-      shares: r.shares,
-      price: r.price,
-      fx: fxRate(r.stock.currency),
-      invested: r.invested,
-      valueTWD: r.valueTWD,
-      pnl: r.pnl,
-    })),
-    quoteErrors: state.quoteErrors,
-  };
+  });
 }
 
 function upsertLocalSnapshot(snapshot) {

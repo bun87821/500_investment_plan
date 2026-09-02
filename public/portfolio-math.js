@@ -102,6 +102,19 @@
 
   const DEFAULT_BUDGET = 5_000_000;
 
+  // 快照只保留圖表真正會讀的欄位。早期版本還存了 holdings 明細（每檔標的一列）與
+  // quoteErrors，兩者從未被讀取卻佔掉單筆快照約 96% 的體積 —— 帳號資料是一份整存整取的
+  // JSON，放著會一路長到超過請求上限，所以在寫入時一律剝除。
+  const SNAPSHOT_FIELDS = ['date', 'planId', 'at', 'source', 'totalInvested', 'totalValue', 'pnl', 'pnlPct'];
+
+  function slimSnapshot(snapshot) {
+    const out = {};
+    for (const key of SNAPSHOT_FIELDS) if (snapshot[key] !== undefined) out[key] = snapshot[key];
+    return out;
+  }
+
+  const slimSnapshots = (snapshots) => (Array.isArray(snapshots) ? snapshots : []).map(slimSnapshot);
+
   // 舊格式（單一計畫、目標比例掛在標的上）→ 新格式（plans 陣列、交易與快照標明歸屬）。
   // 純函式且幂等：不就地修改輸入，已遷移的資料再跑一次結果相同。
   function migratePortfolio(doc) {
@@ -123,9 +136,7 @@
     const transactions = (Array.isArray(doc.transactions) ? doc.transactions : []).map((t) =>
       Array.isArray(t.plans) && t.plans.length ? t : { ...t, plans: [primary] }
     );
-    const snapshots = (Array.isArray(doc.snapshots) ? doc.snapshots : []).map((s) =>
-      s.planId ? s : { ...s, planId: primary }
-    );
+    const snapshots = slimSnapshots(doc.snapshots).map((s) => (s.planId ? s : { ...s, planId: primary }));
     return { ...doc, plans, transactions, snapshots };
   }
 
@@ -548,6 +559,8 @@
     fxRateOf,
     eventKey,
     DEFAULT_BUDGET,
+    slimSnapshot,
+    slimSnapshots,
     migratePortfolio,
     transactionsInPlan,
     transactionsOnlyInPlan,

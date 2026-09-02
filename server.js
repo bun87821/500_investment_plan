@@ -28,7 +28,10 @@ app.use((req, res, next) => {
   }
   next();
 });
-app.use(express.json({ limit: '1mb' }));
+// 帳號資料是一份整存整取的 JSON（交易 + 快照一起送），會隨使用年數單向成長。
+// 快照瘦身後每筆約 166 bytes（3 個計畫約 122KB/年），4mb 留了數十年的餘裕；
+// 真的逼近時該做的是把快照移到獨立資料表，而不是再往上加。
+app.use(express.json({ limit: '4mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ---- Session（HMAC 簽章的無狀態 token，存在 httpOnly cookie）----
@@ -348,8 +351,14 @@ app.put('/api/portfolio', async (req, res) => {
   try {
     // 樂觀鎖：客戶端帶上讀取時的 rev，不符表示其他裝置已改過 → 409 附最新資料
     const expectedRev = body.rev === undefined ? null : Number(body.rev);
+    // 只覆寫這次有帶的欄位，其餘沿用既有值。前端一般的儲存（例如新增一筆交易）不會帶
+    // snapshots，若整份覆寫會把每天 14:00 記錄的快照一併清掉。
+    // rev 檢查在寫入時是原子的，所以「先讀來合併、再帶 rev 寫入」不會有競態：
+    // 期間若有人寫入，rev 就對不上，這次寫入會被擋下並回 409。
+    const { doc: existing } = await readDoc(user.sub);
     // 遷移只在寫入時落地：舊格式資料經一次寫入即帶有 plans 與交易歸屬
-    const rev = await writeDoc(user.sub, PortfolioMath.migratePortfolio(doc), Number.isNaN(expectedRev) ? null : expectedRev);
+    const merged = PortfolioMath.migratePortfolio({ ...existing, ...doc });
+    const rev = await writeDoc(user.sub, merged, Number.isNaN(expectedRev) ? null : expectedRev);
     res.json({ ok: true, rev });
   } catch (err) {
     if (err instanceof ConflictError) {
@@ -463,7 +472,8 @@ async function createSnapshotsForDoc(doc, source = 'manual') {
     const totalValue = anyValueMissing ? null : holdings.reduce((s, r) => s + r.valueTWD, 0);
     const pnl = totalValue != null ? totalValue - totalInvested : null;
     const pnlPct = pnl != null && totalInvested > 0 ? pnl / totalInvested : null;
-    return {
+    // holdings 只用來加總，不進快照（見 portfolio-math 的 slimSnapshot）
+    return PortfolioMath.slimSnapshot({
       date,
       planId: plan.id,
       at,
@@ -472,9 +482,7 @@ async function createSnapshotsForDoc(doc, source = 'manual') {
       totalValue,
       pnl,
       pnlPct,
-      holdings,
-      quoteErrors: errors,
-    };
+    });
   });
 }
 
