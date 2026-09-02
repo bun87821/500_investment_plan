@@ -249,8 +249,24 @@
     </section>
 
     <section class="card" id="monthly-card" data-collapsible hidden>
-      <h2>月報</h2>
-      <p class="section-subtitle">每月投入、配息、損益與月報酬率（TWR），並與 0050 當月漲跌對比；點列展開每日損益</p>
+      <div class="card-head">
+        <div>
+          <h2>月報</h2>
+          <p class="section-subtitle">每月投入、配息、損益與月報酬率（TWR），並與 0050 當月漲跌對比；點列展開每日損益</p>
+        </div>
+        <div class="segmented" id="monthly-range-control">
+          <button type="button" data-range="all">全部</button>
+          <button type="button" data-range="month">本月</button>
+          <button type="button" data-range="3mo">近3月</button>
+          <button type="button" data-range="year">今年</button>
+        </div>
+      </div>
+      <div class="tx-filter-row">
+        <label>從 <input type="date" id="monthly-from" aria-label="月報起始日期" /></label>
+        <label>到 <input type="date" id="monthly-to" aria-label="月報結束日期" /></label>
+        <button type="button" id="monthly-range-clear" class="btn btn-ghost" hidden>清除區間</button>
+        <span class="tx-filter-count" id="monthly-count"></span>
+      </div>
       <div class="table-wrap">
         <table class="monthly-table">
           <thead>
@@ -266,7 +282,8 @@
           <tbody id="monthly-body"></tbody>
         </table>
       </div>
-      <p class="hint">月報酬率為時間加權（TWR），不受入金時點影響；由歷史回推序列計算，資料不足的月份可能缺漏。</p>
+      <p class="hint" id="monthly-empty" hidden>這個時間區間內沒有月份資料 — 換一個區間，或按「清除區間」看全部。</p>
+      <p class="hint">月報酬率為時間加權（TWR），不受入金時點影響；由歷史回推序列計算，資料不足的月份可能缺漏。每列都是整個月的數字，因此自訂區間會顯示所有與該區間重疊的月份。</p>
     </section>
 
     <section class="grid-2">

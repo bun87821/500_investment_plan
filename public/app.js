@@ -1492,44 +1492,97 @@ function bindDonutTooltip() {
   });
 }
 
-// 交易紀錄的時間區間篩選——只影響這張列表的顯示，持股、KPI 與圖表一律用完整交易紀錄計算
-let txRange = localStorage.getItem('tx-range') || 'all';
-let txFrom = localStorage.getItem('tx-from') || '';
-let txTo = localStorage.getItem('tx-to') || '';
+// ---------- 時間區間篩選（交易紀錄與月報共用）----------
+// 篩選一律只影響該區塊的「顯示」：持股、KPI 與圖表都用完整資料計算，
+// 否則平均成本法少算幾筆買入，均價與損益就全錯了。
 
-function txDateWindow() {
-  return PortfolioMath.transactionDateWindow({ preset: txRange, from: txFrom, to: txTo, today: todayTaipei() });
+// 起訖日標籤；slice 10 = 到日、7 = 到月（月報是整月一列，講到日會誤導）
+function rangeSpanLabel(win, slice) {
+  const f = win.from ? win.from.slice(0, slice) : null;
+  const t = win.to ? win.to.slice(0, slice) : null;
+  return f && t ? `${f} ~ ${t}` : f ? `${f} 起` : t ? `至 ${t}` : '';
 }
 
-function setTxRange(preset, { from = '', to = '' } = {}) {
-  txRange = preset;
-  txFrom = from;
-  txTo = to;
-  localStorage.setItem('tx-range', txRange);
-  localStorage.setItem('tx-from', txFrom);
-  localStorage.setItem('tx-to', txTo);
-  renderTransactions();
+function createRangeFilter({ storageKey, controlId, fromId, toId, clearId }) {
+  let preset = localStorage.getItem(`${storageKey}-range`) || 'all';
+  let from = localStorage.getItem(`${storageKey}-from`) || '';
+  let to = localStorage.getItem(`${storageKey}-to`) || '';
+  let onChange = () => {};
+
+  const set = (nextPreset, { from: nf = '', to: nt = '' } = {}) => {
+    preset = nextPreset;
+    from = nf;
+    to = nt;
+    localStorage.setItem(`${storageKey}-range`, preset);
+    localStorage.setItem(`${storageKey}-from`, from);
+    localStorage.setItem(`${storageKey}-to`, to);
+    onChange();
+  };
+
+  return {
+    get preset() {
+      return preset;
+    },
+    window: () => PortfolioMath.transactionDateWindow({ preset, from, to, today: todayTaipei() }),
+    // 每次重繪時把控制項狀態同步回畫面（切換計畫、重新載入後也要正確）
+    syncControls() {
+      document.querySelectorAll(`#${controlId} button`).forEach((b) => {
+        b.classList.toggle('active', preset !== 'custom' && b.dataset.range === preset);
+      });
+      // 只在值真的不同時才寫回，避免蓋掉使用者正在輸入的內容
+      if ($(fromId).value !== from) $(fromId).value = from;
+      if ($(toId).value !== to) $(toId).value = to;
+      $(clearId).hidden = preset === 'all';
+    },
+    init(handler) {
+      onChange = handler;
+      $(controlId).addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-range]');
+        if (btn) set(btn.dataset.range); // 換預設區間就清掉自訂日期
+      });
+      // 動到任一個日期欄就切成自訂區間；兩個都清空則回到「全部」
+      for (const id of [fromId, toId]) {
+        $(id).addEventListener('change', () => {
+          const f = $(fromId).value;
+          const t = $(toId).value;
+          set(f || t ? 'custom' : 'all', { from: f, to: t });
+        });
+      }
+      $(clearId).addEventListener('click', () => set('all'));
+    },
+  };
 }
+
+const txFilter = createRangeFilter({
+  storageKey: 'tx',
+  controlId: 'tx-range-control',
+  fromId: 'tx-from',
+  toId: 'tx-to',
+  clearId: 'tx-range-clear',
+});
+
+const monthlyFilter = createRangeFilter({
+  storageKey: 'monthly',
+  controlId: 'monthly-range-control',
+  fromId: 'monthly-from',
+  toId: 'monthly-to',
+  clearId: 'monthly-range-clear',
+});
 
 function renderTransactions() {
   const body = $('tx-body');
   body.innerHTML = '';
 
-  document.querySelectorAll('#tx-range-control button').forEach((b) => {
-    b.classList.toggle('active', txRange !== 'custom' && b.dataset.range === txRange);
-  });
-  if ($('tx-from').value !== txFrom) $('tx-from').value = txFrom;
-  if ($('tx-to').value !== txTo) $('tx-to').value = txTo;
-  $('tx-range-clear').hidden = txRange === 'all';
+  txFilter.syncControls();
 
   const all = planTxs();
-  const win = txDateWindow();
+  const win = txFilter.window();
   const sorted = [...PortfolioMath.filterTransactionsByDate(all, win)].sort((a, b) => (a.date < b.date ? 1 : -1));
 
   // 預設區間（近3月之類）算出來的實際起訖日要看得到，否則不知道是從哪天起算
-  const span = win.from && win.to ? `${win.from} ~ ${win.to}` : win.from ? `${win.from} 起` : win.to ? `至 ${win.to}` : '';
+  const span = rangeSpanLabel(win, 10);
   $('tx-count').textContent =
-    txRange === 'all'
+    txFilter.preset === 'all'
       ? all.length
         ? `共 ${all.length} 筆`
         : ''
@@ -1583,9 +1636,22 @@ function renderMonthlyReport() {
     return;
   }
   card.hidden = false;
+
+  monthlyFilter.syncControls();
+  const win = monthlyFilter.window();
+  const shown = PortfolioMath.filterMonthsByDate(months, win);
+
+  // 月報是整月一列，所以標籤只講到月份，避免看起來像被裁成半個月的數字
+  const span = rangeSpanLabel(win, 7);
+  $('monthly-count').textContent =
+    monthlyFilter.preset === 'all'
+      ? `共 ${months.length} 個月`
+      : `${span ? span + '　' : ''}顯示 ${shown.length} / ${months.length} 個月`;
+  $('monthly-empty').hidden = shown.length > 0;
+
   const body = $('monthly-body');
   body.innerHTML = '';
-  for (const m of [...months].reverse()) {
+  for (const m of [...shown].reverse()) {
     const tr = document.createElement('tr');
     tr.className = 'monthly-row';
     const beatsBenchmark = m.twr != null && m.benchPct != null && m.twr >= m.benchPct;
@@ -2247,21 +2313,8 @@ function initForm() {
     renderAlerts();
   });
 
-  $('tx-range-control').addEventListener('click', (e) => {
-    const btn = e.target.closest('button[data-range]');
-    if (btn) setTxRange(btn.dataset.range); // 換預設區間就清掉自訂日期
-  });
-
-  // 動到任一個日期欄就切成自訂區間；兩個都清空則回到「全部」
-  for (const id of ['tx-from', 'tx-to']) {
-    $(id).addEventListener('change', () => {
-      const from = $('tx-from').value;
-      const to = $('tx-to').value;
-      setTxRange(from || to ? 'custom' : 'all', { from, to });
-    });
-  }
-
-  $('tx-range-clear').addEventListener('click', () => setTxRange('all'));
+  txFilter.init(renderTransactions);
+  monthlyFilter.init(renderMonthlyReport);
 
   $('csv-btn').addEventListener('click', () => $('csv-file').click());
   $('csv-file').addEventListener('change', async (e) => {

@@ -879,3 +879,15 @@ test('filterTransactionsByDate：兩端皆含，開放端不設限', () => {
   assert.deepEqual(ids({ from: null, to: '2026-03-01' }), ['a', 'b']);
   assert.deepEqual(ids({ from: null, to: null }), ['a', 'b', 'c', 'd']);
 });
+
+test('filterMonthsByDate：以月份粒度比對，區間有重疊的月份就算數', () => {
+  const rows = [{ month: '2026-02' }, { month: '2026-03' }, { month: '2026-04' }, { month: '2026-05' }];
+  const months = (w) => PM.filterMonthsByDate(rows, w).map((r) => r.month);
+  // 月報的每一列是整個月的數字，因此只要該月與區間有重疊就整列顯示
+  assert.deepEqual(months({ from: '2026-03-15', to: '2026-04-15' }), ['2026-03', '2026-04']);
+  assert.deepEqual(months({ from: '2026-03-01', to: '2026-03-31' }), ['2026-03']);
+  assert.deepEqual(months({ from: '2026-04-01', to: null }), ['2026-04', '2026-05']);
+  assert.deepEqual(months({ from: null, to: '2026-03-01' }), ['2026-02', '2026-03']);
+  assert.deepEqual(months({ from: null, to: null }), ['2026-02', '2026-03', '2026-04', '2026-05']);
+  assert.deepEqual(months({ from: '2027-01-01', to: null }), []);
+});

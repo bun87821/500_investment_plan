@@ -228,6 +228,16 @@
     });
   }
 
+  // 月報用：每一列代表「整個月」，所以只要該月與區間有重疊就整列留下
+  // （不去裁切成半個月的數字——那會讓「當月損益」名不副實）
+  function filterMonthsByDate(rows, window) {
+    const from = window && window.from ? String(window.from).slice(0, 7) : null;
+    const to = window && window.to ? String(window.to).slice(0, 7) : null;
+    return (Array.isArray(rows) ? rows : []).filter(
+      (r) => (!from || String(r.month) >= from) && (!to || String(r.month) <= to)
+    );
+  }
+
   // 提醒的忽略鍵，格式見 CONTEXT.md：`split:<代號>:<日期>` / `div:<代號>:<日期>`
   function eventKey(type, symbol, date) {
     return type + ':' + symbol + ':' + date;
@@ -609,6 +619,7 @@
     transactionsOnlyInPlan,
     transactionDateWindow,
     filterTransactionsByDate,
+    filterMonthsByDate,
     upsertSnapshots,
     copyTransactionsToPlan,
     plansHoldingOn,

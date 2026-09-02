@@ -536,3 +536,81 @@ test('端對端：交易紀錄的時間區間篩選只影響列表，計算不�
 
   assert.deepEqual(jsErrors, [], 'JS errors: ' + jsErrors.join('; '));
 });
+
+test('端對端：月報的時間區間篩選，與交易紀錄的篩選互不干擾', { timeout: 120_000 }, async (t) => {
+  const srv = await startServer();
+  const browser = await chromium.launch({ executablePath: chromiumPath, timeout: 30_000 });
+  t.after(async () => {
+    await browser.close();
+    srv.stop();
+  });
+
+  const page = await browser.newPage({ viewport: { width: 1280, height: 1200 } });
+  const jsErrors = [];
+  page.on('pageerror', (e) => jsErrors.push(e.message));
+  await page.route('**/api/quotes*', (r) => r.fulfill({ json: mockQuotes() }));
+  await page.route('**/api/events*', (r) => r.fulfill({ json: { events: {}, errors: {}, fetchedAt: Date.now() } }));
+  await page.route('**/api/history*', (r) => {
+    const u = new URL(r.request().url());
+    r.fulfill({ json: mockHistory(u.searchParams.get('symbols').split(',')) });
+  });
+
+  await fetch(srv.url + '/api/portfolio', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rev: 0, transactions: TXS }),
+  });
+
+  await page.goto(srv.url);
+  await page.waitForFunction(() => document.querySelectorAll('#monthly-body tr.monthly-row').length > 0, { timeout: 20000 });
+
+  const rows = () => page.locator('#monthly-body tr.monthly-row').count();
+  const investedAll = await page.textContent('#kpi-invested');
+  const total = await rows();
+  assert.ok(total >= 2, `月報應有多個月可篩（實際 ${total}）`);
+  assert.ok((await page.textContent('#monthly-count')).includes(`共 ${total} 個月`));
+
+  // 本月：只剩一列，且計算不受影響
+  await page.click('#monthly-range-control button[data-range="month"]');
+  await page.waitForTimeout(200);
+  assert.equal(await rows(), 1);
+  assert.ok((await page.textContent('#monthly-count')).includes(`1 / ${total} 個月`));
+  assert.equal(await page.textContent('#kpi-invested'), investedAll, '篩選不得影響已投入成本');
+
+  // 自訂區間以「月」為粒度：用月中的日期仍應顯示整個月
+  const months = (
+    await page.evaluate(() => [...document.querySelectorAll('#monthly-body tr.monthly-row td:first-child')].map((td) => td.textContent))
+  );
+  const thisMonth = months[0];
+  await page.fill('#monthly-from', `${thisMonth}-10`);
+  await page.fill('#monthly-to', `${thisMonth}-20`);
+  await page.dispatchEvent('#monthly-to', 'change');
+  await page.waitForTimeout(200);
+  assert.equal(await rows(), 1, '月中的區間仍應顯示整個月');
+  assert.ok((await page.textContent('#monthly-count')).includes(`${thisMonth} ~ ${thisMonth}`), '標籤應以月份呈現');
+  assert.equal(await page.locator('#monthly-range-control button.active').count(), 0);
+
+  // 空區間有專屬提示
+  await page.fill('#monthly-from', '1990-01-01');
+  await page.fill('#monthly-to', '1990-12-31');
+  await page.dispatchEvent('#monthly-to', 'change');
+  await page.waitForTimeout(200);
+  assert.equal(await rows(), 0);
+  assert.ok(!(await page.locator('#monthly-empty').isHidden()));
+
+  // 重新載入後記得區間
+  await page.reload();
+  await page.waitForTimeout(1000);
+  assert.equal(await page.inputValue('#monthly-from'), '1990-01-01');
+
+  // 兩個篩選器各自獨立：改交易紀錄的區間不影響月報
+  await page.click('#monthly-range-control button[data-range="all"]');
+  await page.waitForTimeout(200);
+  await page.click('#tx-range-control button[data-range="month"]');
+  await page.waitForTimeout(200);
+  assert.equal(await rows(), total, '交易紀錄的篩選不應改動月報');
+  assert.ok((await page.textContent('#monthly-count')).includes(`共 ${total} 個月`));
+
+  await page.click('#monthly-range-clear').catch(() => {});
+  assert.deepEqual(jsErrors, [], 'JS errors: ' + jsErrors.join('; '));
+});
