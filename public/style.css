@@ -1057,6 +1057,40 @@ tfoot td {
 .tx-form-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .tx-form-actions .btn-primary { flex: 1; }
 
+/* 交易紀錄的時間區間篩選 */
+.tx-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+.tx-filter-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.tx-filter-row input[type='date'] {
+  border: 1px solid var(--baseline);
+  border-radius: 6px;
+  padding: 4px 7px;
+  font-size: 0.78rem;
+  background: var(--surface);
+  color: var(--text-primary);
+}
+.tx-filter-row input[type='date']:focus {
+  outline: 2px solid var(--series-1);
+  outline-offset: 1px;
+}
+.tx-filter-row .btn { padding: 4px 10px; font-size: 0.78rem; }
+.tx-filter-count {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 /* 再平衡建議：依台灣券商慣例 買紅、賣綠 */
 .action-buy { color: var(--up); font-weight: 600; }
 .action-sell { color: var(--down); font-weight: 600; }

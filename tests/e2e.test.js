@@ -458,3 +458,81 @@ test('端對端：計畫分頁切換後數字跟著換，重新載入回到上�
 
   assert.deepEqual(jsErrors, [], 'JS errors: ' + jsErrors.join('; '));
 });
+
+test('端對端：交易紀錄的時間區間篩選只影響列表，計算不受影響', { timeout: 120_000 }, async (t) => {
+  const srv = await startServer();
+  const browser = await chromium.launch({ executablePath: chromiumPath, timeout: 30_000 });
+  t.after(async () => {
+    await browser.close();
+    srv.stop();
+  });
+
+  const page = await browser.newPage({ viewport: { width: 1280, height: 1200 } });
+  const jsErrors = [];
+  page.on('pageerror', (e) => jsErrors.push(e.message));
+  await page.route('**/api/quotes*', (r) => r.fulfill({ json: mockQuotes() }));
+  await page.route('**/api/events*', (r) => r.fulfill({ json: { events: {}, errors: {}, fetchedAt: Date.now() } }));
+  await page.route('**/api/history*', (r) => {
+    const u = new URL(r.request().url());
+    r.fulfill({ json: mockHistory(u.searchParams.get('symbols').split(',')) });
+  });
+
+  // 交易分散在四個不同月份（相對今天：本月、上個月、約 3 個月前、超過半年前）
+  const iso = (d) => d.toISOString().slice(0, 10);
+  const today = new Date();
+  const thisMonth = iso(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)));
+  const monthsAgo = (n) => iso(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - n, 15)));
+  const dates = [monthsAgo(8), monthsAgo(5), monthsAgo(1), thisMonth];
+  await fetch(srv.url + '/api/portfolio', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      rev: 0,
+      transactions: dates.map((date, i) => ({ id: 'x' + i, stockId: '2330', date, shares: 100, price: 1000 })),
+    }),
+  });
+
+  await page.goto(srv.url);
+  await page.waitForSelector('#tx-body tr');
+
+  const rows = () => page.locator('#tx-body tr').count();
+  assert.equal(await rows(), 4, '預設顯示全部');
+  const investedAll = await page.textContent('#kpi-invested');
+
+  // 本月：只剩月初那筆
+  await page.click('#tx-range-control button[data-range="month"]');
+  await page.waitForTimeout(150);
+  assert.equal(await rows(), 1);
+  assert.ok((await page.textContent('#tx-count')).includes('1 / 4'));
+  assert.equal(await page.textContent('#kpi-invested'), investedAll, '篩選不得影響已投入成本');
+
+  // 自訂區間：只框住最舊的那一筆（端點皆含）
+  await page.fill('#tx-from', dates[0]);
+  await page.fill('#tx-to', dates[0]);
+  await page.dispatchEvent('#tx-to', 'change');
+  await page.waitForTimeout(200);
+  assert.equal(await rows(), 1);
+  assert.equal(await page.locator('#tx-range-control button.active').count(), 0, '自訂區間時預設鈕不應是選取狀態');
+
+  // 篩到空區間時要說清楚是區間的關係，而不是「尚無交易紀錄」
+  await page.fill('#tx-from', '1990-01-01');
+  await page.fill('#tx-to', '1990-01-31');
+  await page.dispatchEvent('#tx-to', 'change');
+  await page.waitForTimeout(200);
+  assert.equal(await rows(), 0);
+  assert.ok((await page.textContent('#tx-empty')).includes('這個時間區間'));
+
+  // 區間記在 localStorage，重新載入後還在
+  await page.reload();
+  await page.waitForTimeout(800);
+  assert.equal(await page.inputValue('#tx-from'), '1990-01-01', '重新載入應記得區間');
+  assert.equal(await rows(), 0);
+
+  // 清除後回到全部
+  await page.click('#tx-range-clear');
+  await page.waitForTimeout(200);
+  assert.equal(await rows(), 4);
+  assert.equal(await page.textContent('#kpi-invested'), investedAll);
+
+  assert.deepEqual(jsErrors, [], 'JS errors: ' + jsErrors.join('; '));
+});

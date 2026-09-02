@@ -319,8 +319,22 @@
       <div class="card tx-history-card" data-collapsible>
         <div class="card-head">
           <h2>交易紀錄</h2>
-          <button type="button" id="csv-btn" class="btn btn-ghost">匯入 CSV</button>
-          <input type="file" id="csv-file" accept=".csv,text/csv" hidden />
+          <div class="chart-actions">
+            <div class="segmented" id="tx-range-control">
+              <button type="button" data-range="all">全部</button>
+              <button type="button" data-range="month">本月</button>
+              <button type="button" data-range="3mo">近3月</button>
+              <button type="button" data-range="year">今年</button>
+            </div>
+            <button type="button" id="csv-btn" class="btn btn-ghost">匯入 CSV</button>
+            <input type="file" id="csv-file" accept=".csv,text/csv" hidden />
+          </div>
+        </div>
+        <div class="tx-filter-row">
+          <label>從 <input type="date" id="tx-from" aria-label="起始日期" /></label>
+          <label>到 <input type="date" id="tx-to" aria-label="結束日期" /></label>
+          <button type="button" id="tx-range-clear" class="btn btn-ghost" hidden>清除區間</button>
+          <span class="tx-filter-count" id="tx-count"></span>
         </div>
         <div class="table-wrap">
           <table class="tx-table">

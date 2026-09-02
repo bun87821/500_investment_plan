@@ -1492,10 +1492,48 @@ function bindDonutTooltip() {
   });
 }
 
+// 交易紀錄的時間區間篩選——只影響這張列表的顯示，持股、KPI 與圖表一律用完整交易紀錄計算
+let txRange = localStorage.getItem('tx-range') || 'all';
+let txFrom = localStorage.getItem('tx-from') || '';
+let txTo = localStorage.getItem('tx-to') || '';
+
+function txDateWindow() {
+  return PortfolioMath.transactionDateWindow({ preset: txRange, from: txFrom, to: txTo, today: todayTaipei() });
+}
+
+function setTxRange(preset, { from = '', to = '' } = {}) {
+  txRange = preset;
+  txFrom = from;
+  txTo = to;
+  localStorage.setItem('tx-range', txRange);
+  localStorage.setItem('tx-from', txFrom);
+  localStorage.setItem('tx-to', txTo);
+  renderTransactions();
+}
+
 function renderTransactions() {
   const body = $('tx-body');
   body.innerHTML = '';
-  const sorted = [...planTxs()].sort((a, b) => (a.date < b.date ? 1 : -1));
+
+  document.querySelectorAll('#tx-range-control button').forEach((b) => {
+    b.classList.toggle('active', txRange !== 'custom' && b.dataset.range === txRange);
+  });
+  if ($('tx-from').value !== txFrom) $('tx-from').value = txFrom;
+  if ($('tx-to').value !== txTo) $('tx-to').value = txTo;
+  $('tx-range-clear').hidden = txRange === 'all';
+
+  const all = planTxs();
+  const win = txDateWindow();
+  const sorted = [...PortfolioMath.filterTransactionsByDate(all, win)].sort((a, b) => (a.date < b.date ? 1 : -1));
+
+  // 預設區間（近3月之類）算出來的實際起訖日要看得到，否則不知道是從哪天起算
+  const span = win.from && win.to ? `${win.from} ~ ${win.to}` : win.from ? `${win.from} 起` : win.to ? `至 ${win.to}` : '';
+  $('tx-count').textContent =
+    txRange === 'all'
+      ? all.length
+        ? `共 ${all.length} 筆`
+        : ''
+      : `${span ? span + '　' : ''}顯示 ${sorted.length} / ${all.length} 筆`;
   for (const t of sorted) {
     const stock = state.stocks.find((s) => s.id === t.stockId);
     const isDiv = t.kind === 'dividend';
@@ -1520,7 +1558,12 @@ function renderTransactions() {
       </td>`;
     body.appendChild(tr);
   }
-  $('tx-empty').hidden = sorted.length > 0;
+  const empty = $('tx-empty');
+  empty.hidden = sorted.length > 0;
+  // 區分「完全沒有交易」與「這個區間內沒有交易」，否則篩掉全部時會誤以為資料不見了
+  empty.textContent = all.length
+    ? '這個時間區間內沒有交易紀錄 — 換一個區間，或按「清除區間」看全部。'
+    : '尚無交易紀錄，從左側表單新增第一筆買入。';
 }
 
 // ---------- 月報 ----------
@@ -2203,6 +2246,22 @@ function initForm() {
     loadHistory();
     renderAlerts();
   });
+
+  $('tx-range-control').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-range]');
+    if (btn) setTxRange(btn.dataset.range); // 換預設區間就清掉自訂日期
+  });
+
+  // 動到任一個日期欄就切成自訂區間；兩個都清空則回到「全部」
+  for (const id of ['tx-from', 'tx-to']) {
+    $(id).addEventListener('change', () => {
+      const from = $('tx-from').value;
+      const to = $('tx-to').value;
+      setTxRange(from || to ? 'custom' : 'all', { from, to });
+    });
+  }
+
+  $('tx-range-clear').addEventListener('click', () => setTxRange('all'));
 
   $('csv-btn').addEventListener('click', () => $('csv-file').click());
   $('csv-file').addEventListener('change', async (e) => {

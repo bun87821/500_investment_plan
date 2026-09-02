@@ -830,3 +830,52 @@ test('computeStock：純記錄型計畫（無總預算）沒有目標金額與�
   assert.equal(r.targetTWD, 0);
   assert.equal(r.progress, null);
 });
+
+// ---------- 交易紀錄的時間區間篩選（只影響列表顯示，不影響任何計算）----------
+
+test('transactionDateWindow：本月／今年為日曆區間（含頭含尾），近3月為滾動起算', () => {
+  const today = '2026-09-02';
+  assert.deepEqual(PM.transactionDateWindow({ preset: 'all', today }), { from: null, to: null });
+  assert.deepEqual(PM.transactionDateWindow({ preset: 'month', today }), { from: '2026-09-01', to: '2026-09-30' });
+  assert.deepEqual(PM.transactionDateWindow({ preset: 'year', today }), { from: '2026-01-01', to: '2026-12-31' });
+  // 近3月：往前推三個日曆月的同一天
+  assert.deepEqual(PM.transactionDateWindow({ preset: '3mo', today }), { from: '2026-06-02', to: null });
+});
+
+test('transactionDateWindow：跨年與月底日的邊界', () => {
+  // 跨年：2026-02-10 往前三個月 → 2025-11-10
+  assert.deepEqual(PM.transactionDateWindow({ preset: '3mo', today: '2026-02-10' }), { from: '2025-11-10', to: null });
+  // 月底夾擠：5/31 往前三個月是 2/31（不存在）→ 取該月最後一天 2/28
+  assert.deepEqual(PM.transactionDateWindow({ preset: '3mo', today: '2026-05-31' }), { from: '2026-02-28', to: null });
+  // 閏年 2028/2 有 29 天
+  assert.deepEqual(PM.transactionDateWindow({ preset: '3mo', today: '2028-05-31' }), { from: '2028-02-29', to: null });
+  // 二月的「本月」尾巴要落在 28/29
+  assert.deepEqual(PM.transactionDateWindow({ preset: 'month', today: '2026-02-15' }), { from: '2026-02-01', to: '2026-02-28' });
+  assert.deepEqual(PM.transactionDateWindow({ preset: 'month', today: '2028-02-15' }), { from: '2028-02-01', to: '2028-02-29' });
+});
+
+test('transactionDateWindow：自訂區間可只給單邊，未知 preset 視為全部', () => {
+  const today = '2026-09-02';
+  assert.deepEqual(PM.transactionDateWindow({ preset: 'custom', from: '2026-03-01', to: '2026-03-31', today }), {
+    from: '2026-03-01',
+    to: '2026-03-31',
+  });
+  assert.deepEqual(PM.transactionDateWindow({ preset: 'custom', from: '2026-03-01', today }), { from: '2026-03-01', to: null });
+  assert.deepEqual(PM.transactionDateWindow({ preset: 'custom', to: '2026-03-31', today }), { from: null, to: '2026-03-31' });
+  assert.deepEqual(PM.transactionDateWindow({ preset: 'custom', today }), { from: null, to: null });
+  assert.deepEqual(PM.transactionDateWindow({ preset: 'bogus', today }), { from: null, to: null });
+});
+
+test('filterTransactionsByDate：兩端皆含，開放端不設限', () => {
+  const txs = [
+    { id: 'a', date: '2026-02-28' },
+    { id: 'b', date: '2026-03-01' },
+    { id: 'c', date: '2026-03-31' },
+    { id: 'd', date: '2026-04-01' },
+  ];
+  const ids = (w) => PM.filterTransactionsByDate(txs, w).map((t) => t.id);
+  assert.deepEqual(ids({ from: '2026-03-01', to: '2026-03-31' }), ['b', 'c'], '起訖日本身要包含在內');
+  assert.deepEqual(ids({ from: '2026-03-01', to: null }), ['b', 'c', 'd']);
+  assert.deepEqual(ids({ from: null, to: '2026-03-01' }), ['a', 'b']);
+  assert.deepEqual(ids({ from: null, to: null }), ['a', 'b', 'c', 'd']);
+});

@@ -185,6 +185,49 @@
     return new Date(ms).toISOString().slice(0, 10);
   }
 
+  // ---- 交易紀錄的時間區間篩選 ----
+  // 日期一律以 'YYYY-MM-DD' 字串運算（不經 Date 的時區換算），與 app 其他地方的台北日期一致。
+
+  const pad2 = (n) => String(n).padStart(2, '0');
+
+  // 該年月的最後一天（1-based month）
+  function lastDayOfMonth(year, month) {
+    return new Date(Date.UTC(year, month, 0)).getUTCDate();
+  }
+
+  // 往前/後推 n 個日曆月；目標月沒有這一天時取該月最後一天（5/31 −3 月 → 2/28）
+  function shiftMonths(dateStr, months) {
+    const [y, m, d] = String(dateStr).split('-').map(Number);
+    const total = y * 12 + (m - 1) + months;
+    const ny = Math.floor(total / 12);
+    const nm = ((total % 12) + 12) % 12; // 0-based
+    return `${ny}-${pad2(nm + 1)}-${pad2(Math.min(d, lastDayOfMonth(ny, nm + 1)))}`;
+  }
+
+  // preset → { from, to }（皆含端點；null 代表該側不設限）
+  // 具名的日曆區間（本月／今年）連結尾也框住，滾動區間（近3月）只設起點。
+  function transactionDateWindow({ preset, from, to, today }) {
+    if (preset === 'custom') return { from: from || null, to: to || null };
+    if (preset === 'month') {
+      const [y, m] = String(today).split('-').map(Number);
+      return { from: `${y}-${pad2(m)}-01`, to: `${y}-${pad2(m)}-${pad2(lastDayOfMonth(y, m))}` };
+    }
+    if (preset === 'year') {
+      const y = String(today).slice(0, 4);
+      return { from: `${y}-01-01`, to: `${y}-12-31` };
+    }
+    if (preset === '3mo') return { from: shiftMonths(today, -3), to: null };
+    return { from: null, to: null }; // 'all' 與未知值
+  }
+
+  function filterTransactionsByDate(transactions, window) {
+    const { from, to } = window || {};
+    return (Array.isArray(transactions) ? transactions : []).filter((t) => {
+      const d = String(t.date || '');
+      return (!from || d >= from) && (!to || d <= to);
+    });
+  }
+
   // 提醒的忽略鍵，格式見 CONTEXT.md：`split:<代號>:<日期>` / `div:<代號>:<日期>`
   function eventKey(type, symbol, date) {
     return type + ':' + symbol + ':' + date;
@@ -564,6 +607,8 @@
     migratePortfolio,
     transactionsInPlan,
     transactionsOnlyInPlan,
+    transactionDateWindow,
+    filterTransactionsByDate,
     upsertSnapshots,
     copyTransactionsToPlan,
     plansHoldingOn,
