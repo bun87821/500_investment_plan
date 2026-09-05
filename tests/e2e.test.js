@@ -764,5 +764,27 @@ test('端對端：多選過去的交易，一次加入另一個計畫', { timeou
   await page.waitForFunction(() => document.querySelectorAll('#tx-body tr').length > 0, { timeout: 15000 });
   assert.equal(await page.evaluate(() => PortfolioMath.transactionsInPlan(state.transactions, 'total').length), 2);
 
+  // --- 批次移出：同時掛兩個計畫的，只拿掉這個計畫的標籤，資料留著 ---
+  await page.click('.plan-tab:has-text("總投資")');
+  await page.waitForFunction(() => document.querySelectorAll('#tx-body tr').length === 2, { timeout: 15000 });
+  await page.check('#tx-pick-all');
+  await page.click('#tx-bulk-remove');
+  await page.waitForFunction(() => document.querySelectorAll('#tx-body tr').length === 0, { timeout: 15000 });
+  assert.equal(await page.evaluate(() => state.transactions.length), 3, '三筆交易都還在');
+  assert.deepEqual(await page.evaluate(() => state.transactions.map((t) => t.plans)), [['credit'], ['credit'], ['credit']]);
+
+  // --- 批次移出：只屬於這個計畫的，整筆刪除 ---
+  await page.click('.plan-tab:has-text("信貸")');
+  await page.waitForFunction(() => document.querySelectorAll('#tx-body tr').length === 3, { timeout: 15000 });
+  await page.locator('#tx-body .tx-pick').first().check();
+  await page.click('#tx-bulk-remove');
+  await page.waitForFunction(() => document.querySelectorAll('#tx-body tr').length === 2, { timeout: 15000 });
+  assert.equal(await page.evaluate(() => state.transactions.length), 2, '這筆只屬於信貸，整筆刪掉');
+
+  // 重整後刪除結果有存回伺服器
+  await page.reload();
+  await page.waitForFunction(() => document.querySelectorAll('#tx-body tr').length > 0, { timeout: 15000 });
+  assert.equal(await page.evaluate(() => state.transactions.length), 2);
+
   assert.deepEqual(jsErrors, [], 'JS errors: ' + jsErrors.join('; '));
 });

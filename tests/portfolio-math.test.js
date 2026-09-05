@@ -1019,3 +1019,63 @@ test('addTransactionsToPlan：加入後那些交易在新計畫裡看得到，�
   assert.deepEqual(PM.transactionsInPlan(out, 'total').map((t) => t.id), ['a']);
   assert.deepEqual(PM.transactionsInPlan(out, 'credit').map((t) => t.id), ['a', 'b']);
 });
+
+// ---------- 批次從計畫移除（removeTransactionsFromPlan）----------
+// 「移除」對只屬於這個計畫的交易＝整筆刪掉；對同時掛別的計畫的，只拿掉這個標籤。
+// 這跟刪除計畫時的孤兒交易規則一致。
+
+test('removeTransactionsFromPlan：只屬於這個計畫的整筆刪掉', () => {
+  const txs = [
+    { id: 'a', stockId: 'aaa', plans: ['credit'] },
+    { id: 'b', stockId: 'aaa', plans: ['credit'] },
+  ];
+  const out = PM.removeTransactionsFromPlan(txs, ['a'], 'credit');
+  assert.deepEqual(out.map((t) => t.id), ['b']);
+});
+
+test('removeTransactionsFromPlan：同時掛別的計畫的只拿掉這個標籤，資料留著', () => {
+  const txs = [{ id: 'a', stockId: 'aaa', plans: ['credit', 'total'] }];
+  const out = PM.removeTransactionsFromPlan(txs, ['a'], 'credit');
+  assert.deepEqual(out.map((t) => t.plans), [['total']]);
+  assert.deepEqual(PM.transactionsInPlan(out, 'total').map((t) => t.id), ['a']);
+  assert.deepEqual(PM.transactionsInPlan(out, 'credit'), []);
+});
+
+test('removeTransactionsFromPlan：沒選到的交易一律不動', () => {
+  const txs = [
+    { id: 'a', stockId: 'aaa', plans: ['credit', 'total'] },
+    { id: 'b', stockId: 'aaa', plans: ['credit'] },
+  ];
+  const out = PM.removeTransactionsFromPlan(txs, ['a'], 'credit');
+  assert.deepEqual(out.map((t) => t.id), ['a', 'b']);
+  assert.deepEqual(out[1].plans, ['credit']);
+  assert.deepEqual(txs[0].plans, ['credit', 'total'], '不就地修改輸入');
+});
+
+test('removeTransactionsFromPlan：沒有標籤的交易改掛其餘計畫，不會憑空消失', () => {
+  // 沒有標籤＝在每個計畫都看得到；從信貸移出後，總投資那邊還是要看得到
+  const txs = [{ id: 'a', stockId: 'aaa' }];
+  const out = PM.removeTransactionsFromPlan(txs, ['a'], 'credit', ['credit', 'total']);
+  assert.deepEqual(out.map((t) => t.plans), [['total']]);
+});
+
+test('removeTransactionsFromPlan：只有一個計畫時，沒有標籤的交易整筆刪掉', () => {
+  const txs = [{ id: 'a', stockId: 'aaa' }];
+  const out = PM.removeTransactionsFromPlan(txs, ['a'], 'credit', ['credit']);
+  assert.deepEqual(out, []);
+});
+
+test('removeTransactionsFromPlan：空清單不動任何東西', () => {
+  const txs = [{ id: 'a', stockId: 'aaa', plans: ['credit'] }];
+  assert.deepEqual(PM.removeTransactionsFromPlan(txs, [], 'credit'), txs);
+});
+
+test('countTransactionsRemoval：分別數出「整筆刪掉」與「只移除標籤」各幾筆', () => {
+  const txs = [
+    { id: 'a', stockId: 'aaa', plans: ['credit'] },
+    { id: 'b', stockId: 'aaa', plans: ['credit', 'total'] },
+    { id: 'c', stockId: 'aaa', plans: ['credit'] },
+    { id: 'd', stockId: 'aaa', plans: ['credit'] }, // 沒選到
+  ];
+  assert.deepEqual(PM.countTransactionsRemoval(txs, ['a', 'b', 'c'], 'credit'), { deleted: 2, untagged: 1 });
+});

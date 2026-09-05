@@ -183,6 +183,40 @@
     });
   }
 
+  // 批次把交易移出某個計畫。規則跟刪除計畫時一樣：只屬於這個計畫的整筆刪掉，
+  // 同時掛別的計畫的只拿掉這個標籤——在別的分頁看得到的資料不該被這裡的操作掃掉。
+  // allPlanIds 是為了處理沒有標籤的交易（原本每個計畫都看得到）：改掛其餘計畫，
+  // 讓它只從眼前這個計畫消失；沒有其餘計畫可掛時才真的刪掉。
+  function removeTransactionsFromPlan(transactions, ids, planId, allPlanIds) {
+    const wanted = new Set(ids || []);
+    if (!wanted.size || !planId) return transactions;
+    const out = [];
+    for (const t of transactions || []) {
+      if (!wanted.has(t.id)) {
+        out.push(t);
+        continue;
+      }
+      const plans = Array.isArray(t.plans) && t.plans.length ? t.plans : allPlanIds || [];
+      const rest = plans.filter((p) => p !== planId);
+      if (rest.length) out.push({ ...t, plans: rest });
+    }
+    return out;
+  }
+
+  // 移出前先讓使用者知道後果：幾筆會整筆消失、幾筆只是拿掉標籤
+  function countTransactionsRemoval(transactions, ids, planId, allPlanIds) {
+    const wanted = new Set(ids || []);
+    let deleted = 0;
+    let untagged = 0;
+    for (const t of transactions || []) {
+      if (!wanted.has(t.id)) continue;
+      const plans = Array.isArray(t.plans) && t.plans.length ? t.plans : allPlanIds || [];
+      if (plans.filter((p) => p !== planId).length) untagged += 1;
+      else deleted += 1;
+    }
+    return { deleted, untagged };
+  }
+
   // 刪除計畫：孤兒交易與該計畫的快照一併刪除，同時掛在其他計畫的交易只移除這個標籤
   function removePlan(doc, planId) {
     return {
@@ -692,6 +726,8 @@
     upsertSnapshots,
     copyTransactionsToPlan,
     addTransactionsToPlan,
+    removeTransactionsFromPlan,
+    countTransactionsRemoval,
     plansHoldingOn,
     removePlan,
     computeStock,

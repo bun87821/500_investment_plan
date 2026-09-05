@@ -1761,7 +1761,7 @@ const selectedTxIds = new Set();
 function renderTxBulkBar(sorted) {
   const row = $('tx-bulk-row');
   const others = state.plans.filter((p) => p.id !== activePlan()?.id);
-  row.hidden = selectedTxIds.size === 0 || others.length === 0;
+  row.hidden = selectedTxIds.size === 0;
   if (row.hidden) {
     const all = $('tx-pick-all');
     if (all) all.checked = false;
@@ -1769,8 +1769,12 @@ function renderTxBulkBar(sorted) {
   }
   $('tx-bulk-count').textContent = `已選 ${selectedTxIds.size} 筆`;
 
-  // 重建下拉時保住原本的選擇，不然每次重畫都跳回第一個
+  // 只有一個計畫時沒有別的計畫可加，但「移出」還是有意義
   const sel = $('tx-bulk-plan');
+  sel.parentElement.hidden = others.length === 0;
+  $('tx-bulk-apply').hidden = others.length === 0;
+
+  // 重建下拉時保住原本的選擇，不然每次重畫都跳回第一個
   const keep = sel.value;
   sel.innerHTML = others.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
   if (others.some((p) => p.id === keep)) sel.value = keep;
@@ -1807,6 +1811,35 @@ async function applyTxBulkPlan() {
   selectedTxIds.clear();
   render();
   loadHistory(); // 另一個計畫的持股變了，回推結果跟著變
+}
+
+async function removeTxBulkFromPlan() {
+  const plan = activePlan();
+  const ids = [...selectedTxIds];
+  if (!plan || !ids.length) return;
+
+  const allPlanIds = state.plans.map((p) => p.id);
+  const { deleted, untagged } = PortfolioMath.countTransactionsRemoval(state.transactions, ids, plan.id, allPlanIds);
+  // 說清楚哪些是真的消失、哪些只是從這個分頁拿掉——這是不可逆的操作
+  const lines = [`把 ${ids.length} 筆交易移出「${plan.name}」：`, ''];
+  if (deleted) lines.push(`・${deleted} 筆只屬於這個計畫 → 整筆刪除，救不回來`);
+  if (untagged) lines.push(`・${untagged} 筆同時屬於其他計畫 → 只拿掉這個計畫的標籤，資料還在`);
+  lines.push('', '確定要移出嗎？');
+  if (!confirm(lines.join('\n'))) return;
+
+  const prev = state.transactions;
+  state.transactions = PortfolioMath.removeTransactionsFromPlan(state.transactions, ids, plan.id, allPlanIds);
+  if (editingTxId && !state.transactions.some((t) => t.id === editingTxId)) resetTxForm();
+  const saved = await savePortfolio();
+  if (!saved) {
+    state.transactions = prev;
+    render();
+    return;
+  }
+  selectedTxIds.clear();
+  render();
+  loadHistory();
+  renderAlerts();
 }
 
 // ---------- 月報 ----------
@@ -2504,6 +2537,7 @@ function initForm() {
     renderTransactions();
   });
   $('tx-bulk-apply').addEventListener('click', applyTxBulkPlan);
+  $('tx-bulk-remove').addEventListener('click', removeTxBulkFromPlan);
   $('tx-bulk-clear').addEventListener('click', () => {
     selectedTxIds.clear();
     renderTransactions();

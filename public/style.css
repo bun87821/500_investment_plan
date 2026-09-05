@@ -122,6 +122,9 @@ h1 {
 }
 .btn-primary:hover { filter: brightness(1.08); }
 .btn-ghost { background: transparent; }
+/* 破壞性操作：用邊框與文字上色就夠醒目，不必整顆填滿搶掉主要動作的位置 */
+.btn-danger { color: var(--up); border-color: color-mix(in srgb, var(--up) 45%, transparent); }
+.btn-danger:hover { border-color: var(--up); background: color-mix(in srgb, var(--up) 8%, var(--surface)); }
 
 .sync-status {
   border: 1px solid var(--border);
@@ -1102,6 +1105,7 @@ tfoot td {
   background: var(--surface-2, rgba(127, 127, 127, 0.08));
 }
 .tx-bulk-count { font-size: 0.82rem; font-weight: 600; }
+.tx-bulk-sep { flex: 1 1 12px; }
 .tx-bulk-row label { display: flex; align-items: center; gap: 6px; font-size: 0.82rem; }
 .tx-pick-col { width: 28px; }
 .tx-unpinned { color: var(--series-2, #b58900); cursor: help; }
