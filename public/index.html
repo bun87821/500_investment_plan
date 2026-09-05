@@ -354,10 +354,17 @@
           <button type="button" id="tx-range-clear" class="btn btn-ghost" hidden>清除區間</button>
           <span class="tx-filter-count" id="tx-count"></span>
         </div>
+        <div class="tx-bulk-row" id="tx-bulk-row" hidden>
+          <span class="tx-bulk-count" id="tx-bulk-count"></span>
+          <label>加入計畫 <select id="tx-bulk-plan" aria-label="要加入的計畫"></select></label>
+          <button type="button" id="tx-bulk-apply" class="btn btn-primary">套用</button>
+          <button type="button" id="tx-bulk-clear" class="btn btn-ghost">取消選取</button>
+        </div>
         <div class="table-wrap">
           <table class="tx-table">
             <thead>
               <tr>
+                <th class="tx-pick-col" id="tx-pick-head" hidden><input type="checkbox" id="tx-pick-all" aria-label="全選" /></th>
                 <th>日期</th>
                 <th>標的</th>
                 <th class="num">股數</th>

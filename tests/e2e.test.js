@@ -688,3 +688,81 @@ test('端對端：釘住歷史匯率讓外幣成本不再隨匯率浮動', { tim
 
   assert.deepEqual(jsErrors, [], 'JS errors: ' + jsErrors.join('; '));
 });
+
+// 把既有交易掛進另一個計畫，本來要一筆一筆進編輯畫面重勾。這裡驗證列表可以多選後一次加入。
+test('端對端：多選過去的交易，一次加入另一個計畫', { timeout: 120_000 }, async (t) => {
+  const srv = await startServer();
+  const browser = await chromium.launch({ executablePath: chromiumPath, timeout: 30_000 });
+  t.after(async () => {
+    await browser.close();
+    srv.stop();
+  });
+
+  const page = await browser.newPage({ viewport: { width: 1280, height: 1200 } });
+  const jsErrors = [];
+  page.on('pageerror', (e) => jsErrors.push(e.message));
+  page.on('dialog', (d) => d.accept());
+  await page.route('**/api/quotes*', (r) => r.fulfill({ json: mockQuotes() }));
+  await page.route('**/api/history*', (r) => {
+    const u = new URL(r.request().url());
+    r.fulfill({ json: mockHistory(u.searchParams.get('symbols').split(',')) });
+  });
+
+  // 三筆交易全掛在「信貸」，「總投資」是空的
+  const put = await fetch(srv.url + '/api/portfolio', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      rev: 0,
+      plans: [
+        { id: 'credit', name: '信貸', budget: 3_000_000, allocations: {} },
+        { id: 'total', name: '總投資', budget: 5_000_000, allocations: {} },
+      ],
+      transactions: TXS.slice(0, 3).map((x) => ({ ...x, plans: ['credit'] })),
+    }),
+  });
+  assert.equal(put.status, 200);
+
+  await page.goto(srv.url);
+  await page.waitForFunction(() => document.querySelectorAll('#tx-body tr').length === 3, { timeout: 15000 });
+
+  // 沒選任何東西時，批次列不出現
+  assert.ok(await page.locator('#tx-bulk-row').isHidden());
+
+  // 勾兩筆 → 批次列出現並顯示筆數
+  const boxes = page.locator('#tx-body .tx-pick');
+  assert.equal(await boxes.count(), 3);
+  await boxes.nth(0).check();
+  await boxes.nth(1).check();
+  assert.equal(await page.textContent('#tx-bulk-count'), '已選 2 筆');
+  // 下拉只列出「別的計畫」，不會讓人加到自己身上
+  assert.deepEqual(await page.locator('#tx-bulk-plan option').allTextContents(), ['總投資']);
+
+  await page.click('#tx-bulk-apply');
+  await page.waitForFunction(() => document.querySelector('#tx-bulk-row').hidden, { timeout: 15000 });
+
+  // 勾的是畫面上最新的兩筆（列表由新到舊）：s1、b2；最舊的 b1 沒被動到
+  const plansById = await page.evaluate(() => Object.fromEntries(state.transactions.map((t) => [t.id, t.plans])));
+  assert.deepEqual(plansById.s1, ['credit', 'total']);
+  assert.deepEqual(plansById.b2, ['credit', 'total']);
+  assert.deepEqual(plansById.b1, ['credit'], '沒勾到的交易不該被動到');
+
+  // 切到「總投資」分頁看得到那兩筆；選取狀態不會跟著跑過來
+  await page.click('.plan-tab:has-text("總投資")');
+  await page.waitForFunction(() => document.querySelectorAll('#tx-body tr').length === 2, { timeout: 15000 });
+  assert.ok(await page.locator('#tx-bulk-row').isHidden());
+  assert.deepEqual(await page.locator('#tx-bulk-plan option').count(), 1);
+
+  // 全選框作用在目前看得到的交易上
+  await page.check('#tx-pick-all');
+  assert.equal(await page.textContent('#tx-bulk-count'), '已選 2 筆');
+  await page.click('#tx-bulk-clear');
+  assert.ok(await page.locator('#tx-bulk-row').isHidden());
+
+  // 重整後標籤有存回伺服器
+  await page.reload();
+  await page.waitForFunction(() => document.querySelectorAll('#tx-body tr').length > 0, { timeout: 15000 });
+  assert.equal(await page.evaluate(() => PortfolioMath.transactionsInPlan(state.transactions, 'total').length), 2);
+
+  assert.deepEqual(jsErrors, [], 'JS errors: ' + jsErrors.join('; '));
+});

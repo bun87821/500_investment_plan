@@ -703,6 +703,7 @@ function renderPlanTabs() {
 // 切換分頁：換一組篩過的交易重跑同一套計算，歷史區間也要跟著重抓
 async function switchPlan(planId) {
   if (planId === activePlan()?.id) return;
+  selectedTxIds.clear(); // 換分頁看的是另一批交易，選取不該跟著跑
   selectPlan(planId);
   closePlanCard();
   render();
@@ -1702,6 +1703,11 @@ function renderTransactions() {
         ? `共 ${all.length} 筆`
         : ''
       : `${span ? span + '　' : ''}顯示 ${sorted.length} / ${all.length} 筆`;
+  // 只有一個計畫時沒有「加入別的計畫」可言，勾選框就不佔位置
+  const bulkOn = state.plans.length > 1;
+  $('tx-pick-head').hidden = !bulkOn;
+  if (!bulkOn) selectedTxIds.clear();
+
   for (const t of sorted) {
     const stock = state.stocks.find((s) => s.id === t.stockId);
     const isDiv = t.kind === 'dividend';
@@ -1715,6 +1721,7 @@ function renderTransactions() {
           : '<span class="chip chip-kind buy">買</span>';
     const tr = document.createElement('tr');
     tr.innerHTML = `
+      ${bulkOn ? `<td class="tx-pick-col"><input type="checkbox" class="tx-pick" data-id="${esc(t.id)}" aria-label="選取這筆交易"${selectedTxIds.has(t.id) ? ' checked' : ''} /></td>` : ''}
       <td>${esc(t.date)}</td>
       <td>${esc(stock ? stock.name : t.stockId)} ${kindChip}</td>
       <td class="num ${!isDiv && !isSplit && t.shares < 0 ? 'down' : ''}">${isDiv || isSplit ? '—' : fmtNum(t.shares, 4)}</td>
@@ -1726,6 +1733,11 @@ function renderTransactions() {
       </td>`;
     body.appendChild(tr);
   }
+  // 選取的交易可能被篩選條件擋掉或刪掉了，只留下畫面上真的看得到的
+  const visible = new Set(sorted.map((t) => t.id));
+  for (const id of [...selectedTxIds]) if (!visible.has(id)) selectedTxIds.delete(id);
+  renderTxBulkBar(sorted);
+
   // 有交易的成本還在跟著匯率浮動時，才把「釘住歷史匯率」露出來
   const unpinned = unpinnedFxTxs().length;
   const pinBtn = $('pin-fx-btn');
@@ -1738,6 +1750,63 @@ function renderTransactions() {
   empty.textContent = all.length
     ? '這個時間區間內沒有交易紀錄 — 換一個區間，或按「清除區間」看全部。'
     : '尚無交易紀錄，從左側表單新增第一筆買入。';
+}
+
+// ---------- 交易紀錄的批次選取 ----------
+// 把既有交易多掛一個計畫，本來要一筆一筆進編輯畫面重勾，量一多就很煩。
+// 這裡讓使用者直接在列表勾選，一次掛進去。
+
+const selectedTxIds = new Set();
+
+function renderTxBulkBar(sorted) {
+  const row = $('tx-bulk-row');
+  const others = state.plans.filter((p) => p.id !== activePlan()?.id);
+  row.hidden = selectedTxIds.size === 0 || others.length === 0;
+  if (row.hidden) {
+    const all = $('tx-pick-all');
+    if (all) all.checked = false;
+    return;
+  }
+  $('tx-bulk-count').textContent = `已選 ${selectedTxIds.size} 筆`;
+
+  // 重建下拉時保住原本的選擇，不然每次重畫都跳回第一個
+  const sel = $('tx-bulk-plan');
+  const keep = sel.value;
+  sel.innerHTML = others.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+  if (others.some((p) => p.id === keep)) sel.value = keep;
+
+  // 全選框反映「畫面上這些是否都選了」
+  $('tx-pick-all').checked = sorted.length > 0 && sorted.every((t) => selectedTxIds.has(t.id));
+}
+
+async function applyTxBulkPlan() {
+  const planId = $('tx-bulk-plan').value;
+  const plan = state.plans.find((p) => p.id === planId);
+  const ids = [...selectedTxIds];
+  if (!plan || !ids.length) return;
+
+  const already = state.transactions.filter(
+    (t) => ids.includes(t.id) && Array.isArray(t.plans) && t.plans.includes(planId)
+  ).length;
+  const toAdd = ids.length - already;
+  if (!toAdd) {
+    alert(`這 ${ids.length} 筆交易已經都在「${plan.name}」裡了。`);
+    return;
+  }
+  const note = already ? `（其中 ${already} 筆已經在裡面，會跳過）` : '';
+  if (!confirm(`把 ${toAdd} 筆交易加入「${plan.name}」？${note}\n\n原本的計畫標籤都會保留。`)) return;
+
+  const prev = state.transactions;
+  state.transactions = PortfolioMath.addTransactionsToPlan(state.transactions, ids, planId);
+  const saved = await savePortfolio();
+  if (!saved) {
+    state.transactions = prev;
+    render();
+    return;
+  }
+  selectedTxIds.clear();
+  render();
+  loadHistory(); // 另一個計畫的持股變了，回推結果跟著變
 }
 
 // ---------- 月報 ----------
@@ -2418,6 +2487,27 @@ function initForm() {
 
   $('tx-cancel-edit').addEventListener('click', resetTxForm);
 
+  $('tx-body').addEventListener('change', (e) => {
+    const box = e.target.closest('.tx-pick');
+    if (!box) return;
+    if (box.checked) selectedTxIds.add(box.dataset.id);
+    else selectedTxIds.delete(box.dataset.id);
+    renderTransactions();
+  });
+  $('tx-pick-all').addEventListener('change', (e) => {
+    // 全選只作用在目前篩選條件下看得到的那些交易
+    const visible = [...document.querySelectorAll('#tx-body .tx-pick')].map((b) => b.dataset.id);
+    for (const id of visible) {
+      if (e.target.checked) selectedTxIds.add(id);
+      else selectedTxIds.delete(id);
+    }
+    renderTransactions();
+  });
+  $('tx-bulk-apply').addEventListener('click', applyTxBulkPlan);
+  $('tx-bulk-clear').addEventListener('click', () => {
+    selectedTxIds.clear();
+    renderTransactions();
+  });
   $('tx-body').addEventListener('click', async (e) => {
     const editBtn = e.target.closest('.tx-edit');
     if (editBtn) {

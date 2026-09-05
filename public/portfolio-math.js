@@ -169,6 +169,20 @@
     return transactionsInPlan(transactions, fromPlanId).map((t) => ({ ...t, id: makeId(), plans: [toPlanId] }));
   }
 
+  // 批次把既有交易掛進某個計畫（一筆一筆編輯太費工）。
+  // 沒有標籤的交易原本在每個計畫都看得到，這裡補成明確的標籤——加入後它就只屬於這個計畫，
+  // 這是使用者按下按鈕時看到的、也是他要的結果。
+  function addTransactionsToPlan(transactions, ids, planId) {
+    const wanted = new Set(ids || []);
+    if (!wanted.size || !planId) return transactions;
+    return (transactions || []).map((t) => {
+      if (!wanted.has(t.id)) return t;
+      const plans = Array.isArray(t.plans) ? t.plans : [];
+      if (plans.includes(planId)) return t;
+      return { ...t, plans: [...plans, planId] };
+    });
+  }
+
   // 刪除計畫：孤兒交易與該計畫的快照一併刪除，同時掛在其他計畫的交易只移除這個標籤
   function removePlan(doc, planId) {
     return {
@@ -677,6 +691,7 @@
     filterMonthsByDate,
     upsertSnapshots,
     copyTransactionsToPlan,
+    addTransactionsToPlan,
     plansHoldingOn,
     removePlan,
     computeStock,

@@ -978,3 +978,44 @@ test('unpinnedFxTransactions：分割紀錄不算浮動交易', () => {
   const out = PM.unpinnedFxTransactions([US_STOCK], txs);
   assert.deepEqual(out.map((t) => t.id), ['buy']);
 });
+
+// ---------- 批次加入計畫（addTransactionsToPlan）----------
+
+test('addTransactionsToPlan：只改指定的交易，保留原有的計畫標籤', () => {
+  const txs = [
+    { id: 'a', stockId: 'aaa', plans: ['credit'] },
+    { id: 'b', stockId: 'aaa', plans: ['credit'] },
+    { id: 'c', stockId: 'aaa', plans: ['credit'] },
+  ];
+  const out = PM.addTransactionsToPlan(txs, ['a', 'c'], 'total');
+  assert.deepEqual(out.map((t) => t.plans), [['credit', 'total'], ['credit'], ['credit', 'total']]);
+  assert.deepEqual(txs[0].plans, ['credit'], '不就地修改輸入');
+});
+
+test('addTransactionsToPlan：已經在該計畫裡的交易不會重複加標籤', () => {
+  const txs = [{ id: 'a', stockId: 'aaa', plans: ['credit', 'total'] }];
+  const out = PM.addTransactionsToPlan(txs, ['a'], 'total');
+  assert.deepEqual(out[0].plans, ['credit', 'total']);
+});
+
+test('addTransactionsToPlan：沒有標籤的交易（在每個計畫都看得到）補成明確的標籤', () => {
+  const txs = [{ id: 'a', stockId: 'aaa' }];
+  const out = PM.addTransactionsToPlan(txs, ['a'], 'total');
+  assert.deepEqual(out[0].plans, ['total']);
+});
+
+test('addTransactionsToPlan：空清單或找不到的 id 都不出事', () => {
+  const txs = [{ id: 'a', stockId: 'aaa', plans: ['credit'] }];
+  assert.deepEqual(PM.addTransactionsToPlan(txs, [], 'total'), txs);
+  assert.deepEqual(PM.addTransactionsToPlan(txs, ['zzz'], 'total'), txs);
+});
+
+test('addTransactionsToPlan：加入後那些交易在新計畫裡看得到，舊計畫也還在', () => {
+  const txs = [
+    { id: 'a', stockId: 'aaa', date: '2026-01-05', shares: 100, price: 500, plans: ['credit'] },
+    { id: 'b', stockId: 'aaa', date: '2026-01-06', shares: 50, price: 500, plans: ['credit'] },
+  ];
+  const out = PM.addTransactionsToPlan(txs, ['a'], 'total');
+  assert.deepEqual(PM.transactionsInPlan(out, 'total').map((t) => t.id), ['a']);
+  assert.deepEqual(PM.transactionsInPlan(out, 'credit').map((t) => t.id), ['a', 'b']);
+});
