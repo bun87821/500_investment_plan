@@ -260,6 +260,21 @@
     return new Date(ms).toISOString().slice(0, 10);
   }
 
+  // 依公司搜尋交易：比對標的名稱與代號（含不帶後綴的寫法）。
+  // 標的被刪掉的孤兒交易至少還能用 stockId 找到，不然它在列表裡永遠搜不出來。
+  function filterTransactionsByStockQuery(transactions, stocks, query) {
+    const q = String(query || '').trim().toLowerCase();
+    if (!q) return transactions;
+    const stockOf = Object.fromEntries((stocks || []).map((s) => [s.id, s]));
+    return (transactions || []).filter((t) => {
+      const stock = stockOf[t.stockId];
+      const haystack = stock
+        ? [stock.name, stock.symbol, String(stock.symbol || '').split('.')[0]]
+        : [t.stockId];
+      return haystack.some((x) => String(x || '').toLowerCase().includes(q));
+    });
+  }
+
   // ---- 交易紀錄的時間區間篩選 ----
   // 日期一律以 'YYYY-MM-DD' 字串運算（不經 Date 的時區換算），與 app 其他地方的台北日期一致。
 
@@ -749,6 +764,7 @@
     transactionsOnlyInPlan,
     transactionDateWindow,
     filterTransactionsByDate,
+    filterTransactionsByStockQuery,
     filterMonthsByDate,
     upsertSnapshots,
     copyTransactionsToPlan,

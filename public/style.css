@@ -1088,6 +1088,21 @@ tfoot td {
   outline-offset: 1px;
 }
 .tx-filter-row .btn { padding: 4px 10px; font-size: 0.78rem; }
+.tx-search-field { flex: 1 1 180px; min-width: 140px; }
+.tx-search-field input[type='search'] {
+  width: 100%;
+  border: 1px solid var(--baseline);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 0.78rem;
+  background: var(--surface);
+  color: var(--text-primary);
+}
+.tx-search-field input[type='search']:focus {
+  outline: 2px solid var(--series-1);
+  outline-offset: 1px;
+}
+
 .tx-filter-count {
   margin-left: auto;
   color: var(--text-muted);

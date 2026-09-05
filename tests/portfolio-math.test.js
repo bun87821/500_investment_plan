@@ -1150,3 +1150,53 @@ test('upsertStockFromSymbol：新標的不會被塞進任何計畫的目標配�
   const { stocks: out } = PM.upsertStockFromSymbol([], HIT);
   assert.equal(out[0].percent, 0);
 });
+
+// ---------- 依公司搜尋交易（filterTransactionsByStockQuery）----------
+
+const SEARCH_STOCKS = [
+  { id: '2330', name: '台積電', symbol: '2330.TW' },
+  { id: '2454', name: '聯發科', symbol: '2454.TW' },
+  { id: 'TSM', name: 'TSM ADR', symbol: 'TSM' },
+];
+const SEARCH_TXS = [
+  { id: 't1', stockId: '2330' },
+  { id: 't2', stockId: '2454' },
+  { id: 't3', stockId: 'TSM' },
+  { id: 't4', stockId: 'GONE' }, // 標的已被刪掉的孤兒
+];
+const found = (q) => PM.filterTransactionsByStockQuery(SEARCH_TXS, SEARCH_STOCKS, q).map((t) => t.id);
+
+test('filterTransactionsByStockQuery：空字串或空白視為不篩選', () => {
+  assert.deepEqual(found(''), ['t1', 't2', 't3', 't4']);
+  assert.deepEqual(found('   '), ['t1', 't2', 't3', 't4']);
+  assert.deepEqual(PM.filterTransactionsByStockQuery(SEARCH_TXS, SEARCH_STOCKS).map((t) => t.id), ['t1', 't2', 't3', 't4']);
+});
+
+test('filterTransactionsByStockQuery：用公司名稱搜尋（含部分比對）', () => {
+  assert.deepEqual(found('台積'), ['t1']);
+  assert.deepEqual(found('聯發科'), ['t2']);
+});
+
+test('filterTransactionsByStockQuery：用代號搜尋，含不帶後綴的寫法', () => {
+  assert.deepEqual(found('2330'), ['t1']);
+  assert.deepEqual(found('2330.TW'), ['t1']);
+  assert.deepEqual(found('.TW'), ['t1', 't2'], '後綴也能當關鍵字用');
+});
+
+test('filterTransactionsByStockQuery：不分大小寫、頭尾空白忽略', () => {
+  assert.deepEqual(found('tsm'), ['t3']);
+  assert.deepEqual(found('  TSM  '), ['t3']);
+});
+
+test('filterTransactionsByStockQuery：找不到就回空陣列', () => {
+  assert.deepEqual(found('不存在的公司'), []);
+});
+
+test('filterTransactionsByStockQuery：標的已刪掉的交易用 stockId 也搜得到', () => {
+  // 標的被移除後交易還在，至少要能靠 stockId 找出來，不然它永遠搜不到
+  assert.deepEqual(found('GONE'), ['t4']);
+});
+
+test('filterTransactionsByStockQuery：一個關鍵字命中多檔時全部列出', () => {
+  assert.deepEqual(found('2'), ['t1', 't2'], '2330 與 2454 都含 2');
+});
