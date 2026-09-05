@@ -356,8 +356,21 @@
               <button type="button" data-range="year">今年</button>
             </div>
             <button type="button" id="pin-fx-btn" class="btn btn-ghost" hidden>釘住歷史匯率</button>
+            <button type="button" id="paste-btn" class="btn btn-ghost">貼上明細</button>
             <button type="button" id="csv-btn" class="btn btn-ghost">匯入 CSV</button>
             <input type="file" id="csv-file" accept=".csv,text/csv" hidden />
+          </div>
+        </div>
+        <div class="tx-paste" id="tx-paste" hidden>
+          <p class="hint">
+            把券商的歷史成交貼進來，一行一筆。第一行寫欄位名稱，順序隨便排；
+            日期後面的成交時間會自動忽略，逗號／Tab／空白分隔都可以。
+          </p>
+          <textarea id="tx-paste-text" rows="8" spellcheck="false" aria-label="交易明細"></textarea>
+          <div class="tx-paste-actions">
+            <button type="button" id="tx-paste-sample" class="btn btn-ghost">填入範例</button>
+            <button type="button" id="tx-paste-import" class="btn btn-primary">匯入</button>
+            <button type="button" id="tx-paste-close" class="btn btn-ghost">關閉</button>
           </div>
         </div>
         <div class="tx-filter-row">
@@ -394,7 +407,7 @@
           </table>
         </div>
         <p class="hint" id="tx-empty">尚無交易紀錄，從左側表單新增第一筆買入。</p>
-        <p class="hint">CSV 欄位可用 date, stock, shares, price, twd, kind；也支援券商對帳單欄位：股名、日期、成交股數、淨收付、成交單價。stock/股名可填代號或名稱；配息列 kind 填「息」、price 欄填配息總額。</p>
+        <p class="hint">欄位名稱可用 date, stock, shares, price, twd, kind，或中文：日期、代號／股名、成交股數、成交均價、台幣成本、買賣。第一行寫欄位名稱後順序隨便排；沒寫標題列時用「日期, 代號, 股數, 價格」的順序。買賣欄填「買進／賣出」，配息列填「息」並把配息總額放在價格欄。沒見過的代號會自動查 Yahoo 建成標的（目標配置 0%）。</p>
       </div>
     </section>
 

@@ -260,6 +260,157 @@
     return new Date(ms).toISOString().slice(0, 10);
   }
 
+  // ---- 交易明細文字解析 ----
+  // 券商的歷史成交（CSV 檔或直接從畫面抄下來的文字）貼進來就能匯入。
+  // 有標題列就依標題對欄位，順序隨便排；沒有就用預設順序。
+
+  const IMPORT_HEADERS = {
+    date: ['date', '日期', '成交時間', '成交日期', '交易日期'],
+    stock: ['stock', 'symbol', 'ticker', '標的', '代號', '股票', '股名', '商品'],
+    shares: ['shares', 'qty', '股數', '成交股數', '數量'],
+    price: ['price', '價格', '每股價格', '成交價', '成交單價', '成交均價', '均價'],
+    twd: ['twd', 'twdcost', '台幣', '台幣成本', '台幣總成本', '淨收付'],
+    net: ['淨收付'],
+    kind: ['kind', 'type', '類型', '買賣', '買賣別', '交易別', '別'],
+  };
+
+  const BUY_WORDS = ['買進', '買', 'buy', 'b'];
+  const SELL_WORDS = ['賣出', '賣', 'sell', 's'];
+  const DIVIDEND_WORDS = ['dividend', 'div', '息', '配息', '股利', '現金股利'];
+
+  const DATE_LIKE = /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/;
+  const TIME_LIKE = /^\d{1,2}:\d{2}(:\d{2})?$/;
+
+  // 「2026/06/27 02:50:51」用空白切會變成兩欄，害後面的欄位整排位移。
+  // 緊跟在日期後面的純時間欄直接丟掉——成交時間的時分秒對記帳沒有用。
+  function dropTimeCells(cells) {
+    return cells.filter((c, i) => !(TIME_LIKE.test(c) && i > 0 && DATE_LIKE.test(cells[i - 1])));
+  }
+
+  // 一行切成欄位：有逗號就照 CSV 規則（含引號），否則用 Tab／連續空白切
+  function splitRow(line) {
+    if (line.includes(',')) {
+      const cells = [];
+      let cur = '';
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (inQuotes) {
+          if (ch === '"' && line[i + 1] === '"') {
+            cur += '"';
+            i++;
+          } else if (ch === '"') inQuotes = false;
+          else cur += ch;
+        } else if (ch === '"') inQuotes = true;
+        else if (ch === ',') {
+          cells.push(cur);
+          cur = '';
+        } else cur += ch;
+      }
+      cells.push(cur);
+      return dropTimeCells(cells.map((c) => c.trim()));
+    }
+    return dropTimeCells(line.trim().split(/[\t\s]+/));
+  }
+
+  function parseImportNumber(value) {
+    const normalized = String(value ?? '').trim().replace(/,/g, '');
+    return normalized === '' ? NaN : parseFloat(normalized);
+  }
+
+  // '2026/06/27 02:50:51' → '2026-06-27'（成交時間的時分秒不需要）
+  function parseImportDate(value) {
+    const head = String(value ?? '').trim().split(/[\sT]/)[0];
+    const parts = head.replace(/\//g, '-').split('-');
+    if (parts.length !== 3) return '';
+    const [y, m, d] = parts;
+    if (!/^\d{1,4}$/.test(y) || !/^\d{1,2}$/.test(m) || !/^\d{1,2}$/.test(d)) return '';
+    return `${y.padStart(4, '0')}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  }
+
+  // 依代號、名稱或不帶後綴的代號找標的
+  function findStockByText(stocks, text) {
+    const q = String(text ?? '').trim().toLowerCase();
+    if (!q) return null;
+    return (
+      (stocks || []).find(
+        (s) =>
+          String(s.id).toLowerCase() === q ||
+          String(s.symbol).toLowerCase() === q ||
+          String(s.symbol).split('.')[0].toLowerCase() === q ||
+          String(s.name).toLowerCase() === q
+      ) || null
+    );
+  }
+
+  function parseTransactionText(text, stocks) {
+    const lines = String(text || '')
+      .replace(/^﻿/, '')
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l !== '');
+    if (!lines.length) return { rows: [], failed: [], unknownSymbols: [] };
+
+    let table = lines.map(splitRow);
+    // 預設順序沿用既有的 CSV 匯入，避免舊檔匯入行為改變
+    const col = { date: 0, stock: 1, shares: 2, price: 3, twd: 4, kind: 5, net: null };
+    const first = table[0].map((c) => c.toLowerCase());
+    const hasHeader = Object.values(IMPORT_HEADERS).some((names) => names.some((n) => first.includes(n)));
+    if (hasHeader) {
+      for (const key of Object.keys(col)) col[key] = null;
+      for (const [key, names] of Object.entries(IMPORT_HEADERS)) {
+        const idx = first.findIndex((c) => names.includes(c));
+        if (idx >= 0) col[key] = idx;
+      }
+      table = table.slice(1);
+    }
+
+    const rows = [];
+    const failed = [];
+    const unknown = [];
+    const cellAt = (cells, key) => (col[key] == null ? '' : cells[col[key]] ?? '');
+
+    for (const [i, cells] of table.entries()) {
+      const lineNo = i + 1 + (hasHeader ? 1 : 0);
+      const raw = cells.join(' ').slice(0, 40);
+      const date = parseImportDate(cellAt(cells, 'date'));
+      const symbolText = String(cellAt(cells, 'stock')).trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !symbolText) {
+        failed.push(`第 ${lineNo} 行（${raw}）`);
+        continue;
+      }
+
+      const kindRaw = String(cellAt(cells, 'kind')).trim().toLowerCase();
+      const price = parseImportNumber(cellAt(cells, 'price'));
+      const twdRaw = String(cellAt(cells, 'twd')).trim();
+      const twdCost = twdRaw === '' ? null : Math.abs(parseImportNumber(twdRaw)) || null;
+      const stock = findStockByText(stocks, symbolText);
+      const stockId = stock ? stock.id : null;
+      if (!stock && !unknown.includes(symbolText)) unknown.push(symbolText);
+      const base = { date, symbolText, stockId, twdCost };
+
+      if (DIVIDEND_WORDS.includes(kindRaw)) {
+        if ((Number.isNaN(price) || price <= 0) && twdCost == null) {
+          failed.push(`第 ${lineNo} 行（配息缺金額）`);
+          continue;
+        }
+        rows.push({ ...base, kind: 'dividend', amount: Number.isNaN(price) ? 0 : price });
+        continue;
+      }
+
+      // 賣出的判斷：買賣欄寫了賣、或（券商對帳單）淨收付為正
+      const net = col.net == null ? NaN : parseImportNumber(cellAt(cells, 'net'));
+      const isSell = SELL_WORDS.includes(kindRaw) || (!Number.isNaN(net) && net > 0);
+      const magnitude = Math.abs(parseImportNumber(cellAt(cells, 'shares')));
+      if (!magnitude || Number.isNaN(price)) {
+        failed.push(`第 ${lineNo} 行（股數或價格無效）`);
+        continue;
+      }
+      rows.push({ ...base, kind: 'trade', shares: isSell ? -magnitude : magnitude, price });
+    }
+    return { rows, failed, unknownSymbols: unknown };
+  }
+
   // 依公司搜尋交易：比對標的名稱與代號（含不帶後綴的寫法）。
   // 標的被刪掉的孤兒交易至少還能用 stockId 找到，不然它在列表裡永遠搜不出來。
   function filterTransactionsByStockQuery(transactions, stocks, query) {
@@ -765,6 +916,8 @@
     transactionDateWindow,
     filterTransactionsByDate,
     filterTransactionsByStockQuery,
+    findStockByText,
+    parseTransactionText,
     filterMonthsByDate,
     upsertSnapshots,
     copyTransactionsToPlan,

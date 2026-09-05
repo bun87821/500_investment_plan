@@ -946,3 +946,104 @@ test('端對端：搜尋特定公司的交易紀錄', { timeout: 120_000 }, asyn
 
   assert.deepEqual(jsErrors, [], 'JS errors: ' + jsErrors.join('; '));
 });
+
+// 券商的歷史成交直接貼進來就能批次匯入，沒見過的代號自動查 Yahoo 建成標的。
+test('端對端：貼上券商歷史成交批次匯入', { timeout: 120_000 }, async (t) => {
+  const srv = await startServer();
+  const browser = await chromium.launch({ executablePath: chromiumPath, timeout: 30_000 });
+  t.after(async () => {
+    await browser.close();
+    srv.stop();
+  });
+
+  const page = await browser.newPage({ viewport: { width: 1280, height: 1200 } });
+  const jsErrors = [];
+  page.on('pageerror', (e) => jsErrors.push(e.message));
+  const dialogs = [];
+  page.on('dialog', (d) => {
+    dialogs.push(d.message());
+    d.accept();
+  });
+  await page.route('**/api/quotes*', (r) => r.fulfill({ json: mockQuotes() }));
+  await page.route('**/api/history*', (r) => {
+    const u = new URL(r.request().url());
+    r.fulfill({ json: mockHistory(u.searchParams.get('symbols').split(',')) });
+  });
+  const YAHOO = {
+    SMH: { symbol: 'SMH', name: 'VanEck Semiconductor ETF', market: '美股', currency: 'USD' },
+    TSLA: { symbol: 'TSLA', name: 'Tesla, Inc.', market: '美股', currency: 'USD' },
+  };
+  await page.route('**/api/symbol-search*', (r) => {
+    const q = new URL(r.request().url()).searchParams.get('q');
+    r.fulfill({ json: { results: YAHOO[q] ? [YAHOO[q]] : [] } });
+  });
+
+  const put = await fetch(srv.url + '/api/portfolio', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rev: 0, transactions: TXS.slice(0, 1) }),
+  });
+  assert.equal(put.status, 200);
+
+  await page.goto(srv.url);
+  await page.waitForFunction(() => document.querySelectorAll('.pnl-bar').length > 0, { timeout: 15000 });
+  const stocksBefore = await page.evaluate(() => state.stocks.length);
+
+  // 券商畫面抄下來的樣子：日期帶成交時間、代號、買賣、均價、股數
+  await page.click('#paste-btn');
+  await page.fill(
+    '#tx-paste-text',
+    [
+      '日期 代號 買賣 均價 股數',
+      '2026/07/28 02:17:15 TSLA 買進 306 1',
+      '2026/07/07 22:30:49 SMH 買進 571.51 2',
+      '2026/06/02 00:43:10 TSM 買進 442.88 1',
+      '2026/06/01 00:00:00 TSM 賣出 400 1',
+      '這行是垃圾',
+    ].join('\n')
+  );
+  await page.click('#tx-paste-import');
+  await page.waitForFunction(() => state.transactions.length === 5, { timeout: 15000 });
+
+  // 沒見過的代號查 Yahoo 建好了，目標配置 0%
+  assert.equal(await page.evaluate(() => state.stocks.length), stocksBefore + 2);
+  const smh = await page.evaluate(() => state.stocks.find((s) => s.symbol === 'SMH'));
+  assert.deepEqual(smh, {
+    id: 'SMH',
+    name: 'VanEck Semiconductor ETF',
+    symbol: 'SMH',
+    market: '美股',
+    currency: 'USD',
+    category: '未分類',
+    percent: 0,
+  });
+  // TSM 本來就在清單裡，不會重複建立
+  assert.equal(await page.evaluate(() => state.stocks.filter((s) => s.symbol === 'TSM').length), 1);
+
+  // 日期去掉時間、賣出轉負股數
+  const added = await page.evaluate(() => state.transactions.slice(1));
+  assert.deepEqual(
+    added.map((t) => [t.date, t.stockId, t.shares, t.price]),
+    [
+      ['2026-07-28', 'TSLA', 1, 306],
+      ['2026-07-07', 'SMH', 2, 571.51],
+      ['2026-06-02', 'TSM', 1, 442.88],
+      ['2026-06-01', 'TSM', -1, 400],
+    ]
+  );
+
+  // 確認框有講清楚會新增幾檔標的、幾行解不開；匯入後提醒去釘住匯率
+  const confirmMsg = dialogs.find((m) => m.includes('將匯入'));
+  assert.ok(confirmMsg.includes('會新增 2 檔標的'), confirmMsg);
+  assert.ok(confirmMsg.includes('1 行無法解析'), confirmMsg);
+  assert.ok(dialogs.some((m) => m.includes('釘住歷史匯率')), dialogs.join(' | '));
+
+  // 貼上區關閉、內容清空；重整後資料有存回伺服器
+  assert.ok(await page.locator('#tx-paste').isHidden());
+  await page.reload();
+  await page.waitForFunction(() => document.querySelectorAll('.pnl-bar').length > 0, { timeout: 15000 });
+  assert.equal(await page.evaluate(() => state.transactions.length), 5);
+  assert.ok(await page.evaluate(() => state.stocks.some((s) => s.symbol === 'TSLA')));
+
+  assert.deepEqual(jsErrors, [], 'JS errors: ' + jsErrors.join('; '));
+});

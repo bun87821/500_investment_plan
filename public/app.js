@@ -2019,121 +2019,125 @@ function startEditTx(id) {
 
 // ---------- CSV 匯入 ----------
 // 支援引號包裹的欄位；欄位順序 date, stock, shares, price, twd, kind（可有標題列）
-function parseCsvLine(line) {
-  const cells = [];
-  let cur = '';
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (inQuotes) {
-      if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; }
-      else if (ch === '"') inQuotes = false;
-      else cur += ch;
-    } else if (ch === '"') inQuotes = true;
-    else if (ch === ',') { cells.push(cur); cur = ''; }
-    else cur += ch;
-  }
-  cells.push(cur);
-  return cells.map((c) => c.trim());
-}
-
-const CSV_HEADERS = {
-  date: ['date', '日期'],
-  stock: ['stock', 'symbol', 'ticker', '標的', '代號', '股票', '股名'],
-  shares: ['shares', 'qty', '股數', '成交股數'],
-  price: ['price', '價格', '每股價格', '成交價', '成交單價'],
-  twd: ['twd', 'twdcost', '台幣', '台幣成本', '台幣總成本', '淨收付'],
-  net: ['淨收付'],
-  kind: ['kind', 'type', '類型'],
-};
-
-function findStockByText(text) {
-  const q = String(text).trim().toLowerCase();
-  return state.stocks.find(
-    (s) =>
-      s.id.toLowerCase() === q ||
-      s.symbol.toLowerCase() === q ||
-      tickerOf(s.symbol).toLowerCase() === q ||
-      s.name.toLowerCase() === q
-  );
-}
-
-function parseCsvNumber(value) {
-  const normalized = String(value ?? '').trim().replace(/,/g, '');
-  return normalized === '' ? NaN : parseFloat(normalized);
-}
-
-function normalizeCsvDate(value) {
-  const parts = String(value ?? '').trim().replace(/\//g, '-').split('-');
-  if (parts.length !== 3) return '';
-  const [y, m, d] = parts;
-  return `${y.padStart(4, '0')}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
-}
-
-async function importCsv(text) {
-  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter((l) => l.trim() !== '');
-  if (!lines.length) throw new Error('CSV 是空的');
-
-  let rows = lines.map(parseCsvLine);
-  // 有標題列 → 依標題對應欄位；否則用預設順序
-  let col = { date: 0, stock: 1, shares: 2, price: 3, twd: 4, kind: 5, net: null };
-  const first = rows[0].map((c) => c.toLowerCase());
-  const hasHeader = Object.values(CSV_HEADERS).some((names) => names.some((n) => first.includes(n)));
-  if (hasHeader) {
-    for (const [key, names] of Object.entries(CSV_HEADERS)) {
-      const idx = first.findIndex((c) => names.includes(c));
-      if (idx >= 0) col[key] = idx;
-    }
-    rows = rows.slice(1);
+// 匯入交易明細（CSV 檔或直接貼上的文字）。沒見過的代號會先查 Yahoo 建成標的，
+// 不然那幾列只能整批丟掉——買了規劃外的股票時這才是常態。
+async function importTransactionText(text) {
+  const parsed = PortfolioMath.parseTransactionText(text, state.stocks);
+  if (!parsed.rows.length) {
+    throw new Error(
+      '沒有可匯入的資料列。' + (parsed.failed.length ? `\n無法解析：\n${parsed.failed.join('\n')}` : '')
+    );
   }
 
-  const imported = [];
-  const failed = [];
-  for (const [i, cells] of rows.entries()) {
-    const rowNo = i + 1 + (hasHeader ? 1 : 0);
-    const dateRaw = normalizeCsvDate(cells[col.date]);
-    const stock = findStockByText(cells[col.stock] || '');
-    const kindRaw = (cells[col.kind] || '').toLowerCase();
-    const isDiv = ['dividend', 'div', '息', '配息', '股利'].includes(kindRaw);
-    const priceVal = parseCsvNumber(cells[col.price]);
-    const rawShares = parseCsvNumber(cells[col.shares]);
-    const netVal = col.net == null ? NaN : parseCsvNumber(cells[col.net]);
-    const sharesVal = !Number.isNaN(netVal) && netVal > 0 ? -Math.abs(rawShares) : rawShares;
-    const twdRaw = cells[col.twd] || '';
-    const twdCost = twdRaw === '' ? null : Math.abs(parseCsvNumber(twdRaw)) || null;
+  let stocks = state.stocks;
+  const createdNames = [];
+  for (const symbolText of parsed.unknownSymbols) {
+    const hit = await lookupSymbol(symbolText);
+    const result = PortfolioMath.upsertStockFromSymbol(stocks, hit || { symbol: symbolText });
+    if (!result.stockId) continue;
+    stocks = result.stocks;
+    if (result.created) createdNames.push(`${symbolText}${hit ? `（${hit.name}）` : '（查不到，僅以代號建立）'}`);
+  }
 
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateRaw) || !stock) {
-      failed.push(`第 ${rowNo} 列（${cells.join(',').slice(0, 40)}）`);
+  // 標的建好後再對一次，剛剛沒認出來的列現在有 stockId 了
+  const records = [];
+  const unresolved = [];
+  for (const row of parsed.rows) {
+    const stock = row.stockId ? stocks.find((s) => s.id === row.stockId) : PortfolioMath.findStockByText(stocks, row.symbolText);
+    if (!stock) {
+      unresolved.push(row.symbolText);
       continue;
     }
-    if (isDiv) {
-      if ((Number.isNaN(priceVal) || priceVal <= 0) && twdCost == null) {
-        failed.push(`第 ${rowNo} 列（配息缺金額）`);
-        continue;
-      }
-      imported.push({ kind: 'dividend', stockId: stock.id, date: dateRaw, amount: Number.isNaN(priceVal) ? 0 : priceVal, twdCost });
-    } else {
-      if (!sharesVal || Number.isNaN(priceVal)) {
-        failed.push(`第 ${rowNo} 列（股數或價格無效）`);
-        continue;
-      }
-      imported.push({ stockId: stock.id, date: dateRaw, shares: sharesVal, price: priceVal, twdCost });
-    }
+    records.push(
+      row.kind === 'dividend'
+        ? { kind: 'dividend', stockId: stock.id, date: row.date, amount: row.amount, twdCost: row.twdCost }
+        : { stockId: stock.id, date: row.date, shares: row.shares, price: row.price, twdCost: row.twdCost }
+    );
   }
+  if (!records.length) throw new Error('沒有可匯入的資料列：找不到對應的標的。');
 
-  if (!imported.length) throw new Error('沒有可匯入的資料列。' + (failed.length ? `\n無法解析：\n${failed.join('\n')}` : ''));
-  const msg =
-    `將匯入 ${imported.length} 筆交易` +
-    (failed.length ? `，另有 ${failed.length} 列無法解析將略過：\n${failed.slice(0, 5).join('\n')}${failed.length > 5 ? '\n…' : ''}` : '') +
-    '\n確定嗎？';
-  if (!confirm(msg)) return;
-
-  for (const rec of imported) {
-    state.transactions.push({ ...rec, plans: [activePlan().id], id: newTxId() });
+  const notes = [`將匯入 ${records.length} 筆交易到「${activePlan().name}」`];
+  if (createdNames.length) notes.push(`會新增 ${createdNames.length} 檔標的（目標配置 0%）：\n${createdNames.join('\n')}`);
+  if (parsed.failed.length) {
+    notes.push(`${parsed.failed.length} 行無法解析將略過：\n${parsed.failed.slice(0, 5).join('\n')}${parsed.failed.length > 5 ? '\n…' : ''}`);
   }
-  await savePortfolio();
+  if (unresolved.length) notes.push(`${unresolved.length} 列找不到標的將略過：${[...new Set(unresolved)].join('、')}`);
+  if (!confirm(notes.join('\n\n') + '\n\n確定嗎？')) return;
+
+  const prevStocks = state.stocks;
+  const prevTxs = state.transactions;
+  state.stocks = stocks;
+  state.transactions = [
+    ...state.transactions,
+    ...records.map((rec) => ({ ...rec, plans: [activePlan().id], id: newTxId() })),
+  ];
+  const saved = await savePortfolio();
+  if (!saved) {
+    state.stocks = prevStocks;
+    state.transactions = prevTxs;
+    render();
+    return;
+  }
   render();
+  loadQuotes();
   loadHistory();
+
+  // 外幣交易沒帶台幣金額的話，成本會跟著匯率浮動——提醒使用者去釘住
+  const unpinned = unpinnedFxTxs().length;
+  const tail = unpinned ? `\n\n有 ${unpinned} 筆外幣交易沒有台幣金額，成本會跟著匯率浮動。\n請按「釘住歷史匯率」用交易當天的匯率定住。` : '';
+  alert(`已匯入 ${records.length} 筆交易。${tail}`);
+}
+
+const PASTE_SAMPLE = [
+  '日期 代號 買賣 均價 股數',
+  '2026/06/27 02:50:51 SPCX 買進 151 1',
+  '2026/06/05 23:36:34 NVDA 買進 208 1',
+  '2026/06/02 00:43:10 TSM 買進 442.88 1',
+].join('\n');
+
+function toggleTxPaste(open) {
+  const box = $('tx-paste');
+  box.hidden = !open;
+  if (open) $('tx-paste-text').focus();
+}
+
+async function importPastedText() {
+  const text = $('tx-paste-text').value;
+  if (!text.trim()) {
+    alert('請先貼上交易明細');
+    return;
+  }
+  const btn = $('tx-paste-import');
+  btn.disabled = true;
+  btn.textContent = '匯入中…';
+  try {
+    await importTransactionText(text);
+    $('tx-paste-text').value = '';
+    toggleTxPaste(false);
+  } catch (err) {
+    alert(err.message || '匯入失敗');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '匯入';
+  }
+}
+
+// 查一個代號的官方名稱／市場／幣別；查不到回 null（呼叫端會退回只用代號建立）
+async function lookupSymbol(symbolText) {
+  try {
+    const res = await fetch('/api/symbol-search?q=' + encodeURIComponent(symbolText));
+    if (!res.ok) return null;
+    const data = await res.json();
+    const wanted = String(symbolText).trim().toLowerCase();
+    const results = data.results || [];
+    return (
+      results.find((r) => String(r.symbol).toLowerCase() === wanted) ||
+      results.find((r) => String(r.symbol).split('.')[0].toLowerCase() === wanted) ||
+      null
+    );
+  } catch {
+    return null;
+  }
 }
 
 // ---------- 再平衡建議 ----------
@@ -2670,12 +2674,19 @@ function initForm() {
   monthlyFilter.init(renderMonthlyReport);
 
   $('pin-fx-btn').addEventListener('click', pinFxRates);
+  $('paste-btn').addEventListener('click', () => toggleTxPaste($('tx-paste').hidden));
+  $('tx-paste-close').addEventListener('click', () => toggleTxPaste(false));
+  $('tx-paste-sample').addEventListener('click', () => {
+    $('tx-paste-text').value = PASTE_SAMPLE;
+    $('tx-paste-text').focus();
+  });
+  $('tx-paste-import').addEventListener('click', importPastedText);
   $('csv-btn').addEventListener('click', () => $('csv-file').click());
   $('csv-file').addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
     try {
-      await importCsv(await file.text());
+      await importTransactionText(await file.text());
     } catch (err) {
       alert(err.message || 'CSV 解析失敗');
     } finally {
