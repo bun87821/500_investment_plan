@@ -1088,6 +1088,29 @@ tfoot td {
   outline-offset: 1px;
 }
 .tx-filter-row .btn { padding: 4px 10px; font-size: 0.78rem; }
+.tx-paste {
+  border: 1px solid var(--soft-border);
+  border-radius: var(--radius);
+  padding: 10px;
+  margin-bottom: 10px;
+  background: color-mix(in srgb, var(--surface) 88%, var(--page));
+}
+.tx-paste .hint { margin-top: 0; margin-bottom: 8px; }
+.tx-paste textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--baseline);
+  border-radius: 6px;
+  padding: 8px;
+  background: var(--surface);
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  resize: vertical;
+}
+.tx-paste-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+
 .tx-search-field { flex: 1 1 180px; min-width: 140px; }
 .tx-search-field input[type='search'] {
   width: 100%;

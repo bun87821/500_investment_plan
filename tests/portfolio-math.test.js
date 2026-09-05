@@ -1200,3 +1200,115 @@ test('filterTransactionsByStockQuery：標的已刪掉的交易用 stockId 也�
 test('filterTransactionsByStockQuery：一個關鍵字命中多檔時全部列出', () => {
   assert.deepEqual(found('2'), ['t1', 't2'], '2330 與 2454 都含 2');
 });
+
+// ---------- 交易明細文字解析（parseTransactionText）----------
+// 券商的歷史成交貼進來就能匯入：支援標題列、逗號／Tab／空白分隔、日期帶時間、買進賣出。
+
+const IMPORT_STOCKS = [
+  { id: '2330', name: '台積電', symbol: '2330.TW' },
+  { id: 'TSM', name: 'TSM ADR', symbol: 'TSM' },
+];
+const parse = (text) => PM.parseTransactionText(text, IMPORT_STOCKS);
+
+test('parseTransactionText：有標題列時欄位順序隨便排', () => {
+  const { rows, failed } = parse(['日期 代號 買賣 均價 股數', '2026/06/02 TSM 買進 442.88 1'].join('\n'));
+  assert.deepEqual(failed, []);
+  assert.deepEqual(rows, [
+    { date: '2026-06-02', symbolText: 'TSM', stockId: 'TSM', kind: 'trade', shares: 1, price: 442.88, twdCost: null },
+  ]);
+});
+
+test('parseTransactionText：股數在前的標題列也認得', () => {
+  const { rows } = parse(['date,stock,shares,price', '2026-06-02,TSM,2,442.88'].join('\n'));
+  assert.equal(rows[0].shares, 2);
+  assert.equal(rows[0].price, 442.88);
+});
+
+test('parseTransactionText：日期後面的成交時間會被忽略', () => {
+  const { rows } = parse(['日期 代號 買賣 均價 股數', '2026/06/27 02:50:51 SPCX 買進 151 1'].join('\n'));
+  assert.equal(rows[0].date, '2026-06-27');
+  assert.equal(rows[0].symbolText, 'SPCX');
+  assert.equal(rows[0].shares, 1);
+});
+
+test('parseTransactionText：賣出轉成負股數', () => {
+  const { rows } = parse(['日期 代號 買賣 均價 股數', '2026/06/02 TSM 賣出 442.88 3'].join('\n'));
+  assert.equal(rows[0].shares, -3);
+});
+
+test('parseTransactionText：買賣欄的各種寫法都認得', () => {
+  const head = '日期 代號 買賣 均價 股數\n';
+  for (const word of ['買進', '買', 'buy', 'B']) {
+    assert.equal(parse(head + `2026/06/02 TSM ${word} 100 1`).rows[0].shares, 1, word);
+  }
+  for (const word of ['賣出', '賣', 'sell', 'S']) {
+    assert.equal(parse(head + `2026/06/02 TSM ${word} 100 1`).rows[0].shares, -1, word);
+  }
+});
+
+test('parseTransactionText：配息列解析成 dividend', () => {
+  const { rows } = parse(['日期 代號 買賣 均價 股數', '2026/06/02 TSM 配息 120 0'].join('\n'));
+  assert.equal(rows[0].kind, 'dividend');
+  assert.equal(rows[0].amount, 120);
+});
+
+test('parseTransactionText：逗號、Tab、多個空白都能當分隔', () => {
+  const head = '日期 代號 買賣 均價 股數\n';
+  assert.equal(parse(head + '2026/06/02,TSM,買進,442.88,1').rows[0].price, 442.88);
+  assert.equal(parse(head + '2026/06/02\tTSM\t買進\t442.88\t1').rows[0].price, 442.88);
+  assert.equal(parse(head + '2026/06/02    TSM   買進   442.88   1').rows[0].price, 442.88);
+});
+
+test('parseTransactionText：認得的標的帶出 stockId，沒見過的留 null 讓呼叫端去建', () => {
+  const { rows } = parse(['日期 代號 買賣 均價 股數', '2026/06/04 SMH 買進 616 1', '2026/06/02 TSM 買進 442.88 1'].join('\n'));
+  assert.equal(rows[0].stockId, null);
+  assert.equal(rows[0].symbolText, 'SMH');
+  assert.equal(rows[1].stockId, 'TSM');
+});
+
+test('parseTransactionText：標的可用名稱或不帶後綴的代號指定', () => {
+  const head = '日期 代號 買賣 均價 股數\n';
+  assert.equal(parse(head + '2026/06/02 台積電 買進 1000 1').rows[0].stockId, '2330');
+  assert.equal(parse(head + '2026/06/02 2330 買進 1000 1').rows[0].stockId, '2330');
+});
+
+test('parseTransactionText：台幣金額欄有填就帶進來', () => {
+  const { rows } = parse(['日期 代號 買賣 均價 股數 台幣成本', '2026/06/02 TSM 買進 442.88 1 13500'].join('\n'));
+  assert.equal(rows[0].twdCost, 13500);
+});
+
+test('parseTransactionText：沒有標題列時用預設順序 日期 代號 股數 價格', () => {
+  const { rows, failed } = parse('2026-06-02,TSM,2,442.88');
+  assert.deepEqual(failed, []);
+  assert.equal(rows[0].shares, 2);
+  assert.equal(rows[0].price, 442.88);
+});
+
+test('parseTransactionText：解不開的列列進 failed，不影響其他列', () => {
+  const { rows, failed } = parse(
+    ['日期 代號 買賣 均價 股數', '2026/06/02 TSM 買進 442.88 1', '這是一行亂碼', '2026/06/04 SMH 買進 616 1'].join('\n')
+  );
+  assert.equal(rows.length, 2);
+  assert.equal(failed.length, 1);
+  assert.ok(failed[0].includes('這是一行亂碼'));
+});
+
+test('parseTransactionText：空行與空字串不算失敗', () => {
+  assert.deepEqual(parse('').rows, []);
+  const { rows, failed } = parse(['日期 代號 買賣 均價 股數', '', '2026/06/02 TSM 買進 442.88 1', '   '].join('\n'));
+  assert.equal(rows.length, 1);
+  assert.deepEqual(failed, []);
+});
+
+test('parseTransactionText：股數 0 或價格缺漏的買賣列算失敗', () => {
+  const head = '日期 代號 買賣 均價 股數\n';
+  assert.equal(parse(head + '2026/06/02 TSM 買進 442.88 0').failed.length, 1);
+  assert.equal(parse(head + '2026/06/02 TSM 買進 - 1').failed.length, 1);
+});
+
+test('parseTransactionText：回報所有沒見過的代號，去重後給呼叫端去查', () => {
+  const { unknownSymbols } = parse(
+    ['日期 代號 買賣 均價 股數', '2026/06/04 SMH 買進 616 1', '2026/07/07 SMH 買進 571 1', '2026/07/28 TSLA 買進 306 1'].join('\n')
+  );
+  assert.deepEqual(unknownSymbols, ['SMH', 'TSLA']);
+});
