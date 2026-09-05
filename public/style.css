@@ -1149,6 +1149,18 @@ tfoot td {
   min-width: 150px;
 }
 .symbol-field .e-symbol { min-width: 105px; }
+.tx-stock-row { display: flex; gap: 6px; align-items: stretch; }
+.tx-stock-row select { flex: 1 1 auto; min-width: 0; }
+.tx-stock-finder {
+  border: 1px solid var(--soft-border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--surface) 88%, var(--page));
+}
+.tx-stock-finder-row { display: flex; gap: 6px; align-items: stretch; }
+.tx-stock-finder-row input { flex: 1 1 auto; min-width: 0; }
+.tx-stock-finder .hint { margin-top: 6px; }
+
 .symbol-search {
   flex: 0 0 auto;
   padding: 6px 8px;

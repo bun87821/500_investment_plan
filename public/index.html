@@ -299,8 +299,20 @@
           </label>
           <label>
             標的
-            <select id="tx-stock" required></select>
+            <span class="tx-stock-row">
+              <select id="tx-stock" required></select>
+              <button type="button" id="tx-stock-new" class="btn btn-ghost symbol-search" title="查 Yahoo 代號新增標的">查代號</button>
+            </span>
           </label>
+          <div class="tx-stock-finder" id="tx-stock-finder" hidden>
+            <div class="tx-stock-finder-row">
+              <input type="text" id="tx-stock-query" placeholder="輸入名稱或代號，如 聯發科 / NVDA" aria-label="股票名稱或代號" />
+              <button type="button" id="tx-stock-find" class="btn btn-ghost symbol-search">查詢</button>
+              <button type="button" id="tx-stock-finder-close" class="btn btn-ghost symbol-search">關閉</button>
+            </div>
+            <div class="symbol-results" id="tx-stock-results" hidden></div>
+            <p class="hint">選一個結果就會建立標的並選好，目標配置 0%（只記錄，不影響原本的配置基準）。</p>
+          </div>
           <label>
             日期
             <input type="date" id="tx-date" required />

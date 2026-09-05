@@ -169,6 +169,33 @@
     return transactionsInPlan(transactions, fromPlanId).map((t) => ({ ...t, id: makeId(), plans: [toPlanId] }));
   }
 
+  const CURRENCIES = ['TWD', 'USD', 'KRW', 'JPY', 'HKD'];
+
+  // 把代號搜尋的結果變成一檔標的。已經有同一個代號就直接沿用既有那檔——
+  // 使用者取的名字與分類不該被 Yahoo 的官方名稱蓋掉。
+  // 新標的的目標配置一律 0%：它是「事後記錄的持股」，不是規劃的一部分，
+  // 不該去動到原本配置的基準。
+  function upsertStockFromSymbol(stocks, result) {
+    const list = Array.isArray(stocks) ? stocks : [];
+    const symbol = String(result?.symbol || '').trim().toUpperCase();
+    if (!symbol) return { stocks: list, stockId: null, created: false };
+
+    const existing = list.find((s) => String(s.symbol || '').toUpperCase() === symbol);
+    if (existing) return { stocks: list, stockId: existing.id, created: false };
+
+    const currency = CURRENCIES.includes(result.currency) ? result.currency : 'TWD';
+    const stock = {
+      id: symbol,
+      name: String(result.name || '').trim() || symbol,
+      symbol,
+      market: String(result.market || '').trim() || '—',
+      currency,
+      category: '未分類',
+      percent: 0,
+    };
+    return { stocks: [...list, stock], stockId: stock.id, created: true };
+  }
+
   // 批次把既有交易掛進某個計畫（一筆一筆編輯太費工）。
   // 沒有標籤的交易原本在每個計畫都看得到，這裡補成明確的標籤——加入後它就只屬於這個計畫，
   // 這是使用者按下按鈕時看到的、也是他要的結果。
@@ -726,6 +753,8 @@
     upsertSnapshots,
     copyTransactionsToPlan,
     addTransactionsToPlan,
+    upsertStockFromSymbol,
+    CURRENCIES,
     removeTransactionsFromPlan,
     countTransactionsRemoval,
     plansHoldingOn,
