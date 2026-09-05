@@ -27,7 +27,7 @@ const DEFAULT_STOCKS = [
   { id: '6788', name: '華景電', symbol: '6788.TWO', market: '台北', currency: 'TWD', category: '廠務', percent: 0 },
 ];
 
-const CURRENCIES = ['TWD', 'USD', 'KRW', 'JPY', 'HKD'];
+const CURRENCIES = PortfolioMath.CURRENCIES; // 與 portfolio-math 共用同一份，避免兩邊走鐘
 
 // 類別配色（依 dataviz 調色盤固定順序，第 9 種以後歸為灰色）
 const CATEGORY_PALETTE_LIGHT = ['#2a78d6', '#1baf7a', '#eda100', '#008300', '#4a3aa7', '#e34948', '#e87ba4', '#eb6834'];
@@ -2208,6 +2208,90 @@ function rebuildStockSelect() {
   if (state.stocks.some((s) => s.id === prev)) select.value = prev;
 }
 
+// ---------- 交易表單裡直接查代號建標的 ----------
+// 買了規劃外的股票時，本來得先繞去「編輯標的」開一檔才能記交易。
+// 這裡沿用同一支 /api/symbol-search，選完直接建好標的並選中。
+
+function toggleTxStockFinder(open) {
+  const box = $('tx-stock-finder');
+  box.hidden = !open;
+  if (open) {
+    $('tx-stock-query').focus();
+  } else {
+    $('tx-stock-query').value = '';
+    $('tx-stock-results').hidden = true;
+    $('tx-stock-results').innerHTML = '';
+  }
+}
+
+async function findTxStockSymbol() {
+  const query = $('tx-stock-query').value.trim();
+  const resultsEl = $('tx-stock-results');
+  if (query.length < 2) {
+    resultsEl.textContent = '請輸入至少 2 個字';
+    resultsEl.hidden = false;
+    return;
+  }
+  const btn = $('tx-stock-find');
+  btn.disabled = true;
+  btn.textContent = '查詢中';
+  resultsEl.innerHTML = '';
+  resultsEl.hidden = true;
+  try {
+    const res = await fetch('/api/symbol-search?q=' + encodeURIComponent(query));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '查詢失敗');
+    const results = data.results || [];
+    if (!results.length) {
+      resultsEl.textContent = '找不到符合的 Yahoo 代號';
+    } else {
+      resultsEl.innerHTML = results
+        .map(
+          (r) => `
+            <button type="button" class="symbol-result tx-symbol-result" data-symbol="${esc(r.symbol)}" data-name="${esc(r.name)}" data-market="${esc(r.market)}" data-currency="${esc(r.currency)}">
+              <strong>${esc(r.symbol)}</strong>
+              <span>${esc(r.name)}</span>
+              <small>${esc(r.market)}・${esc(r.currency)}</small>
+            </button>`
+        )
+        .join('');
+    }
+    resultsEl.hidden = false;
+  } catch (err) {
+    resultsEl.textContent = err.message || '查詢失敗，請稍後再試';
+    resultsEl.hidden = false;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '查詢';
+  }
+}
+
+async function useTxStockResult(btn) {
+  const hit = {
+    symbol: btn.dataset.symbol,
+    name: btn.dataset.name,
+    market: btn.dataset.market,
+    currency: btn.dataset.currency,
+  };
+  const { stocks, stockId, created } = PortfolioMath.upsertStockFromSymbol(state.stocks, hit);
+  if (!stockId) return;
+
+  if (created) {
+    const prev = state.stocks;
+    state.stocks = stocks;
+    const saved = await savePortfolio();
+    if (!saved) {
+      state.stocks = prev;
+      return;
+    }
+    render();
+  }
+  rebuildStockSelect();
+  $('tx-stock').value = stockId;
+  toggleTxStockFinder(false);
+  if (created) loadQuotes(); // 新標的還沒有報價
+}
+
 // ---------- 標的編輯 ----------
 function editorRow(s = { id: '', name: '', symbol: '', market: '台股', currency: 'TWD', category: '', percent: 0 }) {
   const tr = document.createElement('tr');
@@ -2471,6 +2555,19 @@ function initForm() {
   $('tx-date').value = todayTaipei();
 
   $('tx-kind').addEventListener('change', updateTxKindUI);
+
+  $('tx-stock-new').addEventListener('click', () => toggleTxStockFinder($('tx-stock-finder').hidden));
+  $('tx-stock-finder-close').addEventListener('click', () => toggleTxStockFinder(false));
+  $('tx-stock-find').addEventListener('click', findTxStockSymbol);
+  $('tx-stock-query').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault(); // 這個輸入框在交易表單裡，Enter 不該送出整張表單
+    findTxStockSymbol();
+  });
+  $('tx-stock-results').addEventListener('click', (e) => {
+    const hit = e.target.closest('.tx-symbol-result');
+    if (hit) useTxStockResult(hit);
+  });
 
   $('tx-form').addEventListener('submit', async (e) => {
     e.preventDefault();

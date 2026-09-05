@@ -1079,3 +1079,74 @@ test('countTransactionsRemoval：分別數出「整筆刪掉」與「只移除�
   ];
   assert.deepEqual(PM.countTransactionsRemoval(txs, ['a', 'b', 'c'], 'credit'), { deleted: 2, untagged: 1 });
 });
+
+// ---------- 從代號搜尋結果建立標的（upsertStockFromSymbol）----------
+// 讓使用者在新增交易時直接查代號建標的，不必先繞去「編輯標的」。
+
+const HIT = { symbol: '2454.TW', name: '聯發科', market: '台股', currency: 'TWD' };
+
+test('upsertStockFromSymbol：清單裡沒有就新增一檔，目標配置 0%', () => {
+  const stocks = [{ id: '2330', name: '台積電', symbol: '2330.TW', currency: 'TWD', percent: 25 }];
+  const { stocks: out, stockId, created } = PM.upsertStockFromSymbol(stocks, HIT);
+  assert.equal(created, true);
+  assert.equal(stockId, '2454.TW');
+  assert.equal(out.length, 2);
+  assert.deepEqual(out[1], {
+    id: '2454.TW',
+    name: '聯發科',
+    symbol: '2454.TW',
+    market: '台股',
+    currency: 'TWD',
+    category: '未分類',
+    percent: 0,
+  });
+  assert.equal(stocks.length, 1, '不就地修改輸入');
+});
+
+test('upsertStockFromSymbol：已經有這個代號就直接用它，不重複建立', () => {
+  const stocks = [{ id: '2330', name: '台積電', symbol: '2330.TW', currency: 'TWD', percent: 25 }];
+  const { stocks: out, stockId, created } = PM.upsertStockFromSymbol(stocks, {
+    symbol: '2330.TW',
+    name: 'Taiwan Semiconductor',
+    market: '台股',
+    currency: 'TWD',
+  });
+  assert.equal(created, false);
+  assert.equal(stockId, '2330');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].name, '台積電', '既有標的的名稱不被搜尋結果覆蓋');
+});
+
+test('upsertStockFromSymbol：代號大小寫不同視為同一檔', () => {
+  const stocks = [{ id: 'TSM', name: 'TSM ADR', symbol: 'TSM', currency: 'USD', percent: 0 }];
+  const { stockId, created } = PM.upsertStockFromSymbol(stocks, { symbol: 'tsm', name: 'x', currency: 'USD' });
+  assert.equal(created, false);
+  assert.equal(stockId, 'TSM');
+});
+
+test('upsertStockFromSymbol：代號會轉大寫，名稱留空時退回代號', () => {
+  const { stocks: out } = PM.upsertStockFromSymbol([], { symbol: 'nvda', currency: 'USD' });
+  assert.equal(out[0].symbol, 'NVDA');
+  assert.equal(out[0].id, 'NVDA');
+  assert.equal(out[0].name, 'NVDA');
+});
+
+test('upsertStockFromSymbol：認不得的幣別退回 TWD，市場留白填「—」', () => {
+  const { stocks: out } = PM.upsertStockFromSymbol([], { symbol: 'ABC.TW', name: 'ABC', currency: 'XYZ' });
+  assert.equal(out[0].currency, 'TWD');
+  assert.equal(out[0].market, '—');
+});
+
+test('upsertStockFromSymbol：沒有代號就什麼都不做', () => {
+  const stocks = [{ id: '2330', symbol: '2330.TW' }];
+  const r = PM.upsertStockFromSymbol(stocks, { name: '沒有代號' });
+  assert.equal(r.stockId, null);
+  assert.equal(r.created, false);
+  assert.deepEqual(r.stocks, stocks);
+});
+
+test('upsertStockFromSymbol：新標的不會被塞進任何計畫的目標配置', () => {
+  // percent 是「目標配置」的來源；0 代表純記錄，不影響原本的配置基準
+  const { stocks: out } = PM.upsertStockFromSymbol([], HIT);
+  assert.equal(out[0].percent, 0);
+});

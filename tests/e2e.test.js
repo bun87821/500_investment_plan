@@ -788,3 +788,97 @@ test('端對端：多選過去的交易，一次加入另一個計畫', { timeou
 
   assert.deepEqual(jsErrors, [], 'JS errors: ' + jsErrors.join('; '));
 });
+
+// 買了規劃外的股票時，不必先繞去「編輯標的」開一檔才能記交易。
+test('端對端：在交易表單直接查代號建標的並記一筆交易', { timeout: 120_000 }, async (t) => {
+  const srv = await startServer();
+  const browser = await chromium.launch({ executablePath: chromiumPath, timeout: 30_000 });
+  t.after(async () => {
+    await browser.close();
+    srv.stop();
+  });
+
+  const page = await browser.newPage({ viewport: { width: 1280, height: 1200 } });
+  const jsErrors = [];
+  page.on('pageerror', (e) => jsErrors.push(e.message));
+  page.on('dialog', (d) => d.accept());
+  await page.route('**/api/quotes*', (r) => r.fulfill({ json: mockQuotes() }));
+  await page.route('**/api/history*', (r) => {
+    const u = new URL(r.request().url());
+    r.fulfill({ json: mockHistory(u.searchParams.get('symbols').split(',')) });
+  });
+  let searchedFor = null;
+  await page.route('**/api/symbol-search*', (r) => {
+    searchedFor = new URL(r.request().url()).searchParams.get('q');
+    r.fulfill({ json: { results: [{ symbol: '2603.TW', name: '長榮', market: '台股', currency: 'TWD' }] } });
+  });
+
+  const put = await fetch(srv.url + '/api/portfolio', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rev: 0, transactions: TXS.slice(0, 1) }),
+  });
+  assert.equal(put.status, 200);
+
+  await page.goto(srv.url);
+  await page.waitForFunction(() => document.querySelectorAll('.pnl-bar').length > 0, { timeout: 15000 });
+
+  // 一開始搜尋區是收起來的
+  assert.ok(await page.locator('#tx-stock-finder').isHidden());
+  const before = await page.evaluate(() => state.stocks.length);
+
+  await page.click('#tx-stock-new');
+  await page.fill('#tx-stock-query', '長榮');
+  await page.click('#tx-stock-find');
+  await page.waitForSelector('.tx-symbol-result', { timeout: 15000 });
+  assert.equal(searchedFor, '長榮');
+
+  await page.click('.tx-symbol-result');
+  await page.waitForFunction(() => document.querySelector('#tx-stock-finder').hidden, { timeout: 15000 });
+
+  // 標的建好了，目標配置 0%，而且下拉已經選中它
+  const created = await page.evaluate(() => state.stocks.find((s) => s.symbol === '2603.TW'));
+  assert.deepEqual(created, {
+    id: '2603.TW',
+    name: '長榮',
+    symbol: '2603.TW',
+    market: '台股',
+    currency: 'TWD',
+    category: '未分類',
+    percent: 0,
+  });
+  assert.equal(await page.evaluate(() => state.stocks.length), before + 1);
+  assert.equal(await page.inputValue('#tx-stock'), '2603.TW');
+
+  // 接著就能直接記一筆交易
+  await page.fill('#tx-shares', '100');
+  await page.fill('#tx-price', '1200');
+  await page.click('#tx-submit');
+  await page.waitForFunction(() => state.transactions.length === 2, { timeout: 15000 });
+  const tx = await page.evaluate(() => state.transactions[1]);
+  assert.equal(tx.stockId, '2603.TW');
+  assert.equal(tx.shares, 100);
+
+  // 查到已經有的代號時不會重複建立，直接選中既有那檔
+  await page.unroute('**/api/symbol-search*');
+  await page.route('**/api/symbol-search*', (r) =>
+    r.fulfill({ json: { results: [{ symbol: '2330.TW', name: 'Taiwan Semiconductor', market: '台股', currency: 'TWD' }] } })
+  );
+  const count = await page.evaluate(() => state.stocks.length);
+  await page.click('#tx-stock-new');
+  await page.fill('#tx-stock-query', '2330');
+  await page.click('#tx-stock-find');
+  await page.waitForSelector('.tx-symbol-result', { timeout: 15000 });
+  await page.click('.tx-symbol-result');
+  await page.waitForFunction(() => document.querySelector('#tx-stock-finder').hidden, { timeout: 15000 });
+  assert.equal(await page.evaluate(() => state.stocks.length), count, '既有代號不重複建立');
+  assert.equal(await page.inputValue('#tx-stock'), '2330');
+  assert.equal(await page.evaluate(() => state.stocks.find((s) => s.id === '2330').name), '台積電', '既有名稱不被覆蓋');
+
+  // 重整後新標的有存回伺服器
+  await page.reload();
+  await page.waitForFunction(() => document.querySelectorAll('.pnl-bar').length > 0, { timeout: 15000 });
+  assert.ok(await page.evaluate(() => state.stocks.some((s) => s.symbol === '2603.TW')));
+
+  assert.deepEqual(jsErrors, [], 'JS errors: ' + jsErrors.join('; '));
+});
