@@ -16,6 +16,7 @@
 | 交易 | transaction | 一筆買入/賣出/配息紀錄：`{ stockId, date, shares, price, twd, kind, plans }`；賣出以負股數表示；`plans` 標明它屬於哪些計畫（可多個） |
 | 現金股利 | `kind: 'dividend'` | 配息交易，計入已實現損益，不影響持股股數 |
 | 平均成本 | average cost | 每檔標的的持股平均成本；賣出時以平均成本法結算已實現損益 |
+| 釘住台幣成本 | pin TWD cost | 把外幣交易的台幣金額（`twdCost`）以「交易當天匯率」寫死。沒釘住的交易每次開網頁都用即時匯率重算，成本會在沒有交易的日子跟著匯率浮動 |
 | 已實現損益 | realized P/L | 賣出結算＋現金股利的合計 |
 | 未實現損益 | unrealized P/L | 目前市值 − 已投入成本（紅漲綠跌顯示） |
 | 報價 | quote | Yahoo Finance 即時報價，經後端 `/api/quotes` 代理，60 秒快取；美股/韓股以即時匯率換算台幣 |

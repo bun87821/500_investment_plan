@@ -549,6 +549,121 @@ function computeStockFor(plan, stock) {
   );
 }
 
+// 外幣交易留空台幣金額時，就用「此刻」的匯率把台幣成本算好存下來。
+// 不存的話，日後每次開網頁都會拿當天匯率重算，於是沒交易的日子成本也會跟著匯率飄。
+function pinTwdCost(record) {
+  if (record.twdCost != null) return record;
+  const stock = state.stocks.find((s) => s.id === record.stockId);
+  if (!stock || stock.currency === 'TWD') return record;
+  // 補登過去的交易用今天的匯率釘死反而失真，留給「釘住歷史匯率」以當天匯率補
+  if (record.date !== todayTaipei()) return record;
+  const fx = fxRate(stock.currency);
+  if (!(fx > 0)) return record; // 匯率抓不到就維持留空，之後可用「釘住歷史匯率」補
+  const native =
+    record.kind === 'dividend'
+      ? Math.abs(Number(record.amount) || 0)
+      : Math.abs(Number(record.shares) || 0) * (Number(record.price) || 0);
+  return { ...record, twdCost: Math.round(native * fx) };
+}
+
+// ---------- 釘住歷史匯率 ----------
+// 既有的外幣交易若沒填台幣金額，成本會每天跟著匯率重算。這裡抓 Yahoo 的歷史匯率，
+// 依「交易當天」的匯率算出台幣金額寫回 twdCost；先把差額列給使用者確認再寫入。
+
+// 全帳號（不分計畫）成本會浮動的交易
+function unpinnedFxTxs() {
+  return PortfolioMath.unpinnedFxTransactions(state.stocks, state.transactions);
+}
+
+// 依現在的即時匯率換算——也就是使用者今天看到的成本
+function nativeToTwdNow(t) {
+  const stock = state.stocks.find((s) => s.id === t.stockId);
+  const fx = stock ? fxRate(stock.currency) : null;
+  if (!(fx > 0)) return null;
+  const native = t.kind === 'dividend' ? Math.abs(Number(t.amount) || 0) : Math.abs(Number(t.shares) || 0) * (Number(t.price) || 0);
+  return native * fx;
+}
+
+async function pinFxRates() {
+  const btn = $('pin-fx-btn');
+  const pending = unpinnedFxTxs();
+  if (!pending.length) {
+    alert('沒有需要釘住的交易：外幣交易都已經記錄台幣金額了。');
+    return;
+  }
+  const fxSyms = [
+    ...new Set(
+      pending
+        .map((t) => state.stocks.find((s) => s.id === t.stockId))
+        .map((s) => (s ? fxSymbolOf(s.currency) : null))
+        .filter(Boolean)
+    ),
+  ];
+  const btnLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '抓匯率中…';
+  let history = null;
+  try {
+    // 交易可能很久以前，一律抓 max；匯率只有一兩個代號，量不大
+    const res = await fetch('/api/history?range=max&symbols=' + encodeURIComponent(fxSyms.join(',')));
+    if (!res.ok) throw new Error();
+    history = await res.json();
+  } catch {
+    alert('抓不到歷史匯率，請稍後再試。');
+    return;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = btnLabel;
+  }
+
+  const { pins, missing } = PortfolioMath.planFxPins({
+    stocks: state.stocks,
+    transactions: pending,
+    history,
+  });
+  if (!pins.length) {
+    alert('查不到這些交易日期的匯率，沒有可以釘住的紀錄。');
+    return;
+  }
+
+  const pinnedTotal = pins.reduce((sum, p) => sum + p.twdCost, 0);
+  let nowTotal = 0;
+  let nowKnown = true;
+  for (const p of pins) {
+    const now = nativeToTwdNow(pending.find((t) => t.id === p.id));
+    if (now == null) nowKnown = false;
+    else nowTotal += now;
+  }
+  const diff = pinnedTotal - nowTotal;
+  const sample = pins
+    .slice(0, 5)
+    .map((p) => `　${p.date}　${p.symbol}　匯率 ${fmtNum(p.rate, 4)} → ${fmtTWD(p.twdCost)}`)
+    .join('\n');
+  const lines = [
+    `要把 ${pins.length} 筆外幣交易的台幣成本，依交易當天的匯率釘住：`,
+    '',
+    sample + (pins.length > 5 ? `\n　…以及其他 ${pins.length - 5} 筆` : ''),
+    '',
+    `釘住後的成本合計：${fmtTWD(pinnedTotal)}`,
+    nowKnown ? `目前畫面上的成本：${fmtTWD(nowTotal)}（${diff >= 0 ? '+' : ''}${fmtTWD(diff)}）` : '（目前匯率抓不到，無法比較差額）',
+  ];
+  if (missing.length) lines.push('', `另有 ${missing.length} 筆查不到當天匯率，這次不會動到。`);
+  lines.push('', '確定寫入嗎？');
+  if (!confirm(lines.join('\n'))) return;
+
+  const prev = state.transactions;
+  state.transactions = PortfolioMath.applyFxPins(state.transactions, pins);
+  const saved = await savePortfolio();
+  if (!saved) {
+    state.transactions = prev;
+    render();
+    return;
+  }
+  render();
+  loadHistory();
+  alert(`已釘住 ${pins.length} 筆交易的台幣成本，成本不會再跟著匯率變動。`);
+}
+
 function sortedByTargetPercent(items, stockOf = (x) => x) {
   return items
     .map((item, index) => ({ item, index }))
@@ -1604,13 +1719,19 @@ function renderTransactions() {
       <td>${esc(stock ? stock.name : t.stockId)} ${kindChip}</td>
       <td class="num ${!isDiv && !isSplit && t.shares < 0 ? 'down' : ''}">${isDiv || isSplit ? '—' : fmtNum(t.shares, 4)}</td>
       <td class="num">${isSplit ? '分割 1→' + fmtNum(t.ratio, 4) : (isDiv ? fmtNum(t.amount, 2) : fmtNum(t.price, 4)) + ' ' + (stock ? esc(stock.currency) : '')}</td>
-      <td class="num">${isSplit ? '—' : t.twdCost != null ? fmtTWD(t.twdCost) : '（依匯率）'}</td>
+      <td class="num">${isSplit ? '—' : t.twdCost != null ? fmtTWD(t.twdCost) : '<span class="tx-unpinned" title="沒有記錄台幣金額，成本會跟著即時匯率浮動">（依匯率）</span>'}</td>
       <td class="tx-actions">
         ${isSplit ? '' : `<button class="tx-edit" data-id="${esc(t.id)}" title="編輯">✎</button>`}
         <button class="tx-del" data-id="${esc(t.id)}" title="刪除">✕</button>
       </td>`;
     body.appendChild(tr);
   }
+  // 有交易的成本還在跟著匯率浮動時，才把「釘住歷史匯率」露出來
+  const unpinned = unpinnedFxTxs().length;
+  const pinBtn = $('pin-fx-btn');
+  pinBtn.hidden = unpinned === 0;
+  pinBtn.textContent = `釘住歷史匯率（${unpinned}）`;
+
   const empty = $('tx-empty');
   empty.hidden = sorted.length > 0;
   // 區分「完全沒有交易」與「這個區間內沒有交易」，否則篩掉全部時會誤以為資料不見了
@@ -2245,7 +2366,7 @@ function initEditor() {
 // ---------- 事件 ----------
 function initForm() {
   rebuildStockSelect();
-  $('tx-date').value = new Date().toISOString().slice(0, 10);
+  $('tx-date').value = todayTaipei();
 
   $('tx-kind').addEventListener('change', updateTxKindUI);
 
@@ -2270,6 +2391,7 @@ function initForm() {
       if (!shares || Number.isNaN(price)) return;
       record = { ...base, shares, price, twdCost };
     }
+    record = pinTwdCost(record);
 
     const plans = state.plans.length < 2 ? [activePlan().id] : selectedTxPlans();
     if (!plans.length) {
@@ -2316,6 +2438,7 @@ function initForm() {
   txFilter.init(renderTransactions);
   monthlyFilter.init(renderMonthlyReport);
 
+  $('pin-fx-btn').addEventListener('click', pinFxRates);
   $('csv-btn').addEventListener('click', () => $('csv-file').click());
   $('csv-file').addEventListener('change', async (e) => {
     const file = e.target.files[0];
