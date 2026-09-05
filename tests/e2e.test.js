@@ -882,3 +882,67 @@ test('端對端：在交易表單直接查代號建標的並記一筆交易', { 
 
   assert.deepEqual(jsErrors, [], 'JS errors: ' + jsErrors.join('; '));
 });
+
+// 交易一多就難翻，要能直接搜某家公司的紀錄。
+test('端對端：搜尋特定公司的交易紀錄', { timeout: 120_000 }, async (t) => {
+  const srv = await startServer();
+  const browser = await chromium.launch({ executablePath: chromiumPath, timeout: 30_000 });
+  t.after(async () => {
+    await browser.close();
+    srv.stop();
+  });
+
+  const page = await browser.newPage({ viewport: { width: 1280, height: 1200 } });
+  const jsErrors = [];
+  page.on('pageerror', (e) => jsErrors.push(e.message));
+  page.on('dialog', (d) => d.accept());
+  await page.route('**/api/quotes*', (r) => r.fulfill({ json: mockQuotes() }));
+  await page.route('**/api/history*', (r) => {
+    const u = new URL(r.request().url());
+    r.fulfill({ json: mockHistory(u.searchParams.get('symbols').split(',')) });
+  });
+
+  // 2330 三筆（含配息）、TSM 一筆
+  const put = await fetch(srv.url + '/api/portfolio', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rev: 0, transactions: TXS }),
+  });
+  assert.equal(put.status, 200);
+
+  await page.goto(srv.url);
+  await page.waitForFunction(() => document.querySelectorAll('#tx-body tr').length === 4, { timeout: 15000 });
+  const rows = () => page.locator('#tx-body tr').count();
+
+  // 用公司名稱搜
+  await page.fill('#tx-search', '台積');
+  await page.waitForFunction(() => document.querySelectorAll('#tx-body tr').length === 3, { timeout: 15000 });
+  assert.ok((await page.textContent('#tx-count')).includes('顯示 3 / 4 筆'));
+
+  // 用代號搜，不分大小寫
+  await page.fill('#tx-search', 'tsm');
+  await page.waitForFunction(() => document.querySelectorAll('#tx-body tr').length === 1, { timeout: 15000 });
+
+  // 搜不到時給的是「換關鍵字」而不是「換區間」
+  await page.fill('#tx-search', '不存在的公司');
+  await page.waitForFunction(() => document.querySelectorAll('#tx-body tr').length === 0, { timeout: 15000 });
+  const emptyText = await page.textContent('#tx-empty');
+  assert.ok(emptyText.includes('不存在的公司'), emptyText);
+  assert.ok(!emptyText.includes('時間區間'), emptyText);
+
+  // 清空就回到全部
+  await page.fill('#tx-search', '');
+  await page.waitForFunction(() => document.querySelectorAll('#tx-body tr').length === 4, { timeout: 15000 });
+  assert.ok((await page.textContent('#tx-count')).includes('共 4 筆'));
+
+  // 搜尋與時間區間是「而且」的關係：本月只有配息那筆是 2330
+  await page.fill('#tx-search', '2330');
+  await page.click('#tx-range-control button[data-range="all"]');
+  await page.waitForTimeout(200);
+  assert.equal(await rows(), 3);
+  await page.fill('#tx-from', DATES[DATES.length - 6]);
+  await page.waitForTimeout(300);
+  assert.equal(await rows(), 1, '起始日之後只剩 2330 的配息那筆');
+
+  assert.deepEqual(jsErrors, [], 'JS errors: ' + jsErrors.join('; '));
+});

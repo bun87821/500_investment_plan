@@ -1693,16 +1693,22 @@ function renderTransactions() {
 
   const all = planTxs();
   const win = txFilter.window();
-  const sorted = [...PortfolioMath.filterTransactionsByDate(all, win)].sort((a, b) => (a.date < b.date ? 1 : -1));
+  const query = $('tx-search').value;
+  const matched = PortfolioMath.filterTransactionsByStockQuery(
+    PortfolioMath.filterTransactionsByDate(all, win),
+    state.stocks,
+    query
+  );
+  const sorted = [...matched].sort((a, b) => (a.date < b.date ? 1 : -1));
 
   // 預設區間（近3月之類）算出來的實際起訖日要看得到，否則不知道是從哪天起算
   const span = rangeSpanLabel(win, 10);
-  $('tx-count').textContent =
-    txFilter.preset === 'all'
-      ? all.length
-        ? `共 ${all.length} 筆`
-        : ''
-      : `${span ? span + '　' : ''}顯示 ${sorted.length} / ${all.length} 筆`;
+  const filtered = txFilter.preset !== 'all' || query.trim() !== '';
+  $('tx-count').textContent = !filtered
+    ? all.length
+      ? `共 ${all.length} 筆`
+      : ''
+    : `${span ? span + '　' : ''}顯示 ${sorted.length} / ${all.length} 筆`;
   // 只有一個計畫時沒有「加入別的計畫」可言，勾選框就不佔位置
   const bulkOn = state.plans.length > 1;
   $('tx-pick-head').hidden = !bulkOn;
@@ -1747,9 +1753,11 @@ function renderTransactions() {
   const empty = $('tx-empty');
   empty.hidden = sorted.length > 0;
   // 區分「完全沒有交易」與「這個區間內沒有交易」，否則篩掉全部時會誤以為資料不見了
-  empty.textContent = all.length
-    ? '這個時間區間內沒有交易紀錄 — 換一個區間，或按「清除區間」看全部。'
-    : '尚無交易紀錄，從左側表單新增第一筆買入。';
+  empty.textContent = !all.length
+    ? '尚無交易紀錄，從左側表單新增第一筆買入。'
+    : query.trim()
+      ? `找不到「${query.trim()}」的交易紀錄 — 換個關鍵字，或清空搜尋框看全部。`
+      : '這個時間區間內沒有交易紀錄 — 換一個區間，或按「清除區間」看全部。';
 }
 
 // ---------- 交易紀錄的批次選取 ----------
@@ -2655,6 +2663,8 @@ function initForm() {
     loadHistory();
     renderAlerts();
   });
+
+  $('tx-search').addEventListener('input', renderTransactions);
 
   txFilter.init(renderTransactions);
   monthlyFilter.init(renderMonthlyReport);
