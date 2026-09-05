@@ -614,3 +614,77 @@ test('端對端：月報的時間區間篩選，與交易紀錄的篩選互不�
   await page.click('#monthly-range-clear').catch(() => {});
   assert.deepEqual(jsErrors, [], 'JS errors: ' + jsErrors.join('; '));
 });
+
+// 沒填台幣金額的外幣交易，成本會跟著即時匯率浮動 —— 「今天沒交易，成本卻下降」的成因。
+// 「釘住歷史匯率」要能把它改成交易當天的匯率並存回去。
+test('端對端：釘住歷史匯率讓外幣成本不再隨匯率浮動', { timeout: 120_000 }, async (t) => {
+  const srv = await startServer();
+  const browser = await chromium.launch({ executablePath: chromiumPath, timeout: 30_000 });
+  t.after(async () => {
+    await browser.close();
+    srv.stop();
+  });
+
+  const page = await browser.newPage({ viewport: { width: 1280, height: 1200 } });
+  const jsErrors = [];
+  page.on('pageerror', (e) => jsErrors.push(e.message));
+  page.on('dialog', (d) => d.accept());
+
+  // 買入日的匯率 28，今天的匯率 29 —— 沒釘住的話成本會是今天的 29
+  const buyDate = DATES[DATES.length - 40];
+  const buyIndex = DATES.indexOf(buyDate);
+  await page.route('**/api/quotes*', (r) => r.fulfill({ json: mockQuotes() }));
+  await page.route('**/api/history*', (r) => {
+    const u = new URL(r.request().url());
+    const data = mockHistory(u.searchParams.get('symbols').split(','));
+    if (data.series['TWD=X']) data.series['TWD=X'] = DATES.map((d, i) => [Date.parse(d), i < buyIndex + 1 ? 28 : 29]);
+    r.fulfill({ json: data });
+  });
+
+  const put = await fetch(srv.url + '/api/portfolio', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      rev: 0,
+      transactions: [{ id: 'usd1', stockId: 'TSM', date: buyDate, shares: 100, price: 230, twdCost: null }],
+    }),
+  });
+  assert.equal(put.status, 200);
+
+  await page.goto(srv.url);
+  await page.waitForFunction(() => document.querySelectorAll('.pnl-bar').length > 0, { timeout: 15000 });
+
+  // 釘住前：台幣成本欄顯示「（依匯率）」，按鈕露出且標明筆數
+  assert.equal(await page.locator('.tx-unpinned').count(), 1);
+  const btn = page.locator('#pin-fx-btn');
+  assert.ok(await btn.isVisible(), '有浮動成本的交易時應顯示按鈕');
+  assert.ok((await btn.textContent()).includes('1'));
+  // 目前成本＝100 × 230 × 29（今天的匯率）
+  assert.equal(await page.evaluate(() => computeStock(state.stocks.find((s) => s.id === 'TSM')).invested), 667000);
+
+  await btn.click();
+  await page.waitForFunction(() => document.querySelector('#pin-fx-btn').hidden, { timeout: 15000 });
+
+  // 釘住後：成本改用買入當天的 28，且已寫進交易紀錄
+  assert.equal(await page.evaluate(() => computeStock(state.stocks.find((s) => s.id === 'TSM')).invested), 644000);
+  assert.equal(await page.evaluate(() => state.transactions[0].twdCost), 644000);
+  assert.equal(await page.locator('.tx-unpinned').count(), 0);
+
+  // 存回伺服器，重整後不會退回浮動狀態
+  await page.reload();
+  await page.waitForFunction(() => document.querySelectorAll('.pnl-bar').length > 0, { timeout: 15000 });
+  assert.equal(await page.evaluate(() => state.transactions[0].twdCost), 644000);
+  assert.ok(await page.locator('#pin-fx-btn').isHidden());
+
+  // 新增的外幣交易留空台幣金額時，存檔當下就用即時匯率釘死，不會再留下浮動的紀錄
+  await page.selectOption('#tx-stock', 'TSM');
+  await page.fill('#tx-shares', '10');
+  await page.fill('#tx-price', '200');
+  await page.fill('#tx-twd', '');
+  await page.click('#tx-submit');
+  await page.waitForFunction(() => state.transactions.length === 2, { timeout: 15000 });
+  assert.equal(await page.evaluate(() => state.transactions[1].twdCost), 58_000); // 10 × 200 × 29
+  assert.ok(await page.locator('#pin-fx-btn').isHidden(), '新交易已釘死，不應再出現按鈕');
+
+  assert.deepEqual(jsErrors, [], 'JS errors: ' + jsErrors.join('; '));
+});

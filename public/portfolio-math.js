@@ -346,17 +346,12 @@
     return out;
   }
 
-  // 由交易紀錄＋歷史收盤價逐日重放，回推每天的市值、持有成本、當日損益與對比線
-  function computeDailySeries({ history, stocks, transactions, quotes, budget, benchSymbol, today }) {
-    const hist = history;
-    if (!hist || !Object.keys(hist.series || {}).length) return null;
-    const held = stocks.filter((s) => transactions.some((t) => t.stockId === s.id));
-    if (!held.length) return null;
-
-    const toDate = (ms) => new Date(ms).toISOString().slice(0, 10);
-    const ff = {}; // symbol -> forward-fill 查詢（回傳 ≤ 該日的最後收盤）
-    for (const [sym, points] of Object.entries(hist.series)) {
-      const ent = points.map(([t, c]) => [toDate(t), c]);
+  // 把 { symbol: [[ms, close], ...] } 轉成 { symbol: (date) => 收盤 } 的查詢表。
+  // forward-fill：查不到當天就取「≤ 該日的最後一筆」，週末與休市日才有值可用。
+  function forwardFillSeries(series) {
+    const ff = {};
+    for (const [sym, points] of Object.entries(series || {})) {
+      const ent = points.map(([t, c]) => [msToDateStr(t), c]);
       ff[sym] = (date) => {
         let lo = 0;
         let hi = ent.length - 1;
@@ -371,6 +366,66 @@
         return ans;
       };
     }
+    return ff;
+  }
+
+  // ---- 外幣成本釘住 ----
+  // 外幣交易沒填 twdCost 時，computeStock 只能拿「現在」的匯率回推台幣成本，於是連一筆
+  // 交易都沒有的日子，已投入成本也會跟著匯率上下跑。以下兩個函式把這種交易找出來，並用
+  // 交易當天的歷史匯率算出台幣金額；呼叫端確認後寫回 twdCost，成本就定住不再飄。
+
+  // 這筆交易的原幣金額（買賣＝股數×價格，配息＝配息總額）；不適用者回傳 null
+  function nativeAmountOf(t) {
+    if (t.kind === 'split') return null;
+    if (t.kind === 'dividend') return Math.abs(Number(t.amount) || 0);
+    return Math.abs(Number(t.shares) || 0) * (Number(t.price) || 0);
+  }
+
+  // 成本會隨即時匯率浮動的交易：外幣、且沒填 twdCost
+  function unpinnedFxTransactions(stocks, transactions) {
+    const stockOf = Object.fromEntries((stocks || []).map((s) => [s.id, s]));
+    return (transactions || []).filter((t) => {
+      const stock = stockOf[t.stockId];
+      if (!stock || stock.currency === 'TWD') return false;
+      if (t.kind === 'split') return false;
+      return t.twdCost == null;
+    });
+  }
+
+  // 為每筆浮動交易算出「交易當天匯率」換算的台幣金額。
+  // 回傳 { pins, missing }：pins 可直接寫回 twdCost，missing 是查不到當天匯率的交易。
+  function planFxPins({ stocks, transactions, history }) {
+    const stockOf = Object.fromEntries((stocks || []).map((s) => [s.id, s]));
+    const ff = forwardFillSeries(history?.series);
+    const pins = [];
+    const missing = [];
+    for (const t of unpinnedFxTransactions(stocks, transactions)) {
+      const stock = stockOf[t.stockId];
+      const fxSym = fxSymbolOf(stock.currency);
+      const rate = ff[fxSym]?.(String(t.date)) ?? null;
+      const native = nativeAmountOf(t);
+      const row = { id: t.id, date: t.date, stockId: t.stockId, symbol: stock.symbol, currency: stock.currency, native };
+      if (rate == null || !(rate > 0)) missing.push({ ...row, reason: '查無 ' + fxSym + ' 在 ' + t.date + ' 的匯率' });
+      else pins.push({ ...row, rate, twdCost: Math.round(native * rate) });
+    }
+    return { pins, missing };
+  }
+
+  // 把 planFxPins 的結果寫回交易紀錄；不就地修改輸入
+  function applyFxPins(transactions, pins) {
+    const byId = new Map(pins.map((p) => [p.id, p.twdCost]));
+    return (transactions || []).map((t) => (byId.has(t.id) ? { ...t, twdCost: byId.get(t.id) } : t));
+  }
+
+  // 由交易紀錄＋歷史收盤價逐日重放，回推每天的市值、持有成本、當日損益與對比線
+  function computeDailySeries({ history, stocks, transactions, quotes, budget, benchSymbol, today }) {
+    const hist = history;
+    if (!hist || !Object.keys(hist.series || {}).length) return null;
+    const held = stocks.filter((s) => transactions.some((t) => t.stockId === s.id));
+    if (!held.length) return null;
+
+    const toDate = msToDateStr;
+    const ff = forwardFillSeries(hist.series);
 
     const txs = [...transactions].sort((a, b) => String(a.date).localeCompare(String(b.date)));
     if (!txs.length) return null;
@@ -625,6 +680,10 @@
     plansHoldingOn,
     removePlan,
     computeStock,
+    forwardFillSeries,
+    unpinnedFxTransactions,
+    planFxPins,
+    applyFxPins,
     computeDailySeries,
     computeMonthlyReport,
     computeXirr,

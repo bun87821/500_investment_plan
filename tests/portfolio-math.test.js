@@ -891,3 +891,90 @@ test('filterMonthsByDate：以月份粒度比對，區間有重疊的月份就�
   assert.deepEqual(months({ from: null, to: null }), ['2026-02', '2026-03', '2026-04', '2026-05']);
   assert.deepEqual(months({ from: '2027-01-01', to: null }), []);
 });
+
+// ---------- 外幣成本釘住（planFxPins / applyFxPins）----------
+// 沒填 twdCost 的外幣交易，成本會跟著即時匯率浮動；釘住後就不再受匯率影響。
+
+
+const FX_HISTORY = {
+  series: {
+    'TWD=X': [
+      [D(2026, 1, 5), 31],
+      [D(2026, 1, 6), 32],
+      [D(2026, 2, 2), 30],
+    ],
+    'KRWTWD=X': [[D(2026, 1, 5), 0.024]],
+  },
+};
+
+test('未釘住的外幣成本會隨即時匯率變動（這就是「沒交易成本卻下降」的成因）', () => {
+  const txs = [{ stockId: 'usa', date: '2026-01-05', shares: 10, price: 100 }];
+  const at31 = PM.computeStock(US_STOCK, txs, { USA: { price: 100 }, 'TWD=X': { price: 31 } }, 0);
+  const at30 = PM.computeStock(US_STOCK, txs, { USA: { price: 100 }, 'TWD=X': { price: 30 } }, 0);
+  assert.equal(at31.invested, 31_000);
+  assert.equal(at30.invested, 30_000); // 同一筆交易、不同天，成本少了 1,000
+});
+
+test('釘住後匯率再怎麼變，已投入成本都不動', () => {
+  const txs = [{ id: 't1', stockId: 'usa', date: '2026-01-05', shares: 10, price: 100 }];
+  const { pins } = PM.planFxPins({ stocks: [US_STOCK], transactions: txs, history: FX_HISTORY });
+  const pinned = PM.applyFxPins(txs, pins);
+  for (const rate of [25, 30, 31, 35]) {
+    const r = PM.computeStock(US_STOCK, pinned, { USA: { price: 100 }, 'TWD=X': { price: rate } }, 0);
+    assert.equal(r.invested, 31_000); // 一律是交易當天（1/5）的 31
+  }
+});
+
+test('planFxPins：用交易當天匯率換算，台股與已填 twdCost 的交易不列入', () => {
+  const txs = [
+    { id: 'tw', stockId: 'aaa', date: '2026-01-05', shares: 100, price: 500 },
+    { id: 'fixed', stockId: 'usa', date: '2026-01-05', shares: 10, price: 100, twdCost: 31_500 },
+    { id: 'buy', stockId: 'usa', date: '2026-01-06', shares: 10, price: 100 },
+    { id: 'sell', stockId: 'usa', date: '2026-02-02', shares: -4, price: 120 },
+    { id: 'div', stockId: 'usa', date: '2026-02-02', kind: 'dividend', amount: 50 },
+  ];
+  const { pins, missing } = PM.planFxPins({ stocks: [TW_STOCK, US_STOCK], transactions: txs, history: FX_HISTORY });
+  assert.deepEqual(missing, []);
+  assert.deepEqual(
+    pins.map((p) => [p.id, p.rate, p.twdCost]),
+    [
+      ['buy', 32, 32_000], // 10 × 100 × 32
+      ['sell', 30, 14_400], // 4 × 120 × 30（賣出金額取絕對值）
+      ['div', 30, 1_500], // 50 × 30
+    ]
+  );
+});
+
+test('planFxPins：休市日的交易取「≤ 當天」的最後一筆匯率', () => {
+  const txs = [{ id: 'sat', stockId: 'usa', date: '2026-01-10', shares: 1, price: 100 }];
+  const { pins } = PM.planFxPins({ stocks: [US_STOCK], transactions: txs, history: FX_HISTORY });
+  assert.equal(pins[0].rate, 32); // 1/6 的匯率往後延用
+});
+
+test('planFxPins：交易早於匯率資料起點 → 列為 missing，不亂猜', () => {
+  const txs = [{ id: 'old', stockId: 'usa', date: '2020-01-01', shares: 1, price: 100 }];
+  const { pins, missing } = PM.planFxPins({ stocks: [US_STOCK], transactions: txs, history: FX_HISTORY });
+  assert.deepEqual(pins, []);
+  assert.equal(missing.length, 1);
+  assert.equal(missing[0].id, 'old');
+});
+
+test('applyFxPins：只改到清單裡的交易，其餘原封不動', () => {
+  const txs = [
+    { id: 'a', stockId: 'usa', date: '2026-01-06', shares: 10, price: 100 },
+    { id: 'b', stockId: 'aaa', date: '2026-01-06', shares: 10, price: 100 },
+  ];
+  const out = PM.applyFxPins(txs, [{ id: 'a', twdCost: 32_000 }]);
+  assert.equal(out[0].twdCost, 32_000);
+  assert.equal(out[1].twdCost, undefined);
+  assert.equal(txs[0].twdCost, undefined); // 輸入沒被就地修改
+});
+
+test('unpinnedFxTransactions：分割紀錄不算浮動交易', () => {
+  const txs = [
+    { id: 'sp', stockId: 'usa', date: '2026-01-06', kind: 'split', ratio: 4 },
+    { id: 'buy', stockId: 'usa', date: '2026-01-06', shares: 10, price: 100 },
+  ];
+  const out = PM.unpinnedFxTransactions([US_STOCK], txs);
+  assert.deepEqual(out.map((t) => t.id), ['buy']);
+});
